@@ -1,5 +1,7 @@
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from models import TranscriptionResult
@@ -25,8 +27,9 @@ class UiTests(unittest.TestCase):
                 provider_name="fake",
             )
 
-            write_transcription_file(wav_result, output_dir)
-            write_transcription_file(mp3_result, output_dir)
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                write_transcription_file(wav_result, output_dir)
+                write_transcription_file(mp3_result, output_dir)
 
             self.assertTrue((output_dir / "msg" / "clip.wav.txt").exists())
             self.assertTrue((output_dir / "msg" / "clip.mp3.txt").exists())

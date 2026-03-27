@@ -70,7 +70,7 @@ class Transcriber:
                 style=STYLE_ERROR,
             )
 
-    def process_files(self, prompt: str = "", response_format: str = "text") -> None:
+    def process_files(self, prompt: str = "") -> None:
         self._print_start(prompt)
 
         all_files = self._collect_audio_files()
@@ -94,7 +94,6 @@ class Transcriber:
         success_count, transcription_error_count = self._transcribe_files(
             valid_files=valid_files,
             prompt=prompt,
-            response_format=response_format,
         )
 
         error_count = len(conversion_errors) + transcription_error_count
@@ -230,7 +229,6 @@ class Transcriber:
         self,
         valid_files: List[PreparedFile],
         prompt: str,
-        response_format: str,
     ) -> Tuple[int, int]:
         console.print(
             f"\n| Fase 3: Transcribiendo {len(valid_files)} archivos con {style_keyword(self.provider.name)}...",
@@ -251,7 +249,6 @@ class Transcriber:
                     audio_path=file.transcribe_path,
                     original_filename=file.original_path.name,
                     prompt=prompt,
-                    response_format=response_format,
                 )
 
                 if result.error is None:

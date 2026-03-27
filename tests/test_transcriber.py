@@ -1,5 +1,7 @@
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -24,7 +26,6 @@ class FakeProvider(TranscriptionProvider):
         audio_path: Path,
         original_filename: str,
         prompt: str = "",
-        response_format: str = "text",
     ) -> TranscriptionResult:
         self.transcribed_files.append(original_filename)
         return TranscriptionResult(
@@ -46,6 +47,10 @@ class FakeProvider(TranscriptionProvider):
 
 
 class TranscriberTests(unittest.TestCase):
+    def _run_quietly(self, func):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return func()
+
     def test_records_conversion_errors_without_calling_provider(self) -> None:
         written_results: List[TranscriptionResult] = []
         provider = FakeProvider()
@@ -58,21 +63,24 @@ class TranscriberTests(unittest.TestCase):
             output_dir.mkdir()
             (input_dir / "clip.wav").write_bytes(b"abc")
 
-            transcriber = Transcriber(
-                provider=provider,
-                input_dir=input_dir,
-                output_dir=output_dir,
-                ffmpeg_checker=lambda: True,
-                audio_validator=lambda *_: AudioValidation(
-                    is_valid=True,
-                    error_message=None,
-                    needs_conversion=True,
-                ),
-                audio_converter=lambda _: (None, "fallo de conversion"),
-                result_writer=lambda result, _: written_results.append(result),
-                now_fn=lambda: datetime(2026, 1, 2, 3, 4, 5),
-            )
-            transcriber.process_files()
+            def run_test() -> None:
+                transcriber = Transcriber(
+                    provider=provider,
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    ffmpeg_checker=lambda: True,
+                    audio_validator=lambda *_: AudioValidation(
+                        is_valid=True,
+                        error_message=None,
+                        needs_conversion=True,
+                    ),
+                    audio_converter=lambda _: (None, "fallo de conversion"),
+                    result_writer=lambda result, _: written_results.append(result),
+                    now_fn=lambda: datetime(2026, 1, 2, 3, 4, 5),
+                )
+                transcriber.process_files()
+
+            self._run_quietly(run_test)
 
         self.assertEqual(provider.transcribed_files, [])
         self.assertEqual(len(written_results), 1)
@@ -92,19 +100,22 @@ class TranscriberTests(unittest.TestCase):
             audio_file = input_dir / "voice.mp3"
             audio_file.write_bytes(b"audio")
 
-            transcriber = Transcriber(
-                provider=provider,
-                input_dir=input_dir,
-                output_dir=output_dir,
-                ffmpeg_checker=lambda: False,
-                audio_validator=lambda *_: AudioValidation(
-                    is_valid=True,
-                    error_message=None,
-                    needs_conversion=False,
-                ),
-                result_writer=lambda result, _: written_results.append(result),
-            )
-            transcriber.process_files(prompt="hola")
+            def run_test() -> None:
+                transcriber = Transcriber(
+                    provider=provider,
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    ffmpeg_checker=lambda: False,
+                    audio_validator=lambda *_: AudioValidation(
+                        is_valid=True,
+                        error_message=None,
+                        needs_conversion=False,
+                    ),
+                    result_writer=lambda result, _: written_results.append(result),
+                )
+                transcriber.process_files(prompt="hola")
+
+            self._run_quietly(run_test)
 
             moved_audio = output_dir / "audio" / "voice.mp3"
             self.assertTrue(moved_audio.exists())
@@ -138,16 +149,19 @@ class TranscriberTests(unittest.TestCase):
                 converted_audio.write_bytes(b"mp3-audio")
                 return converted_audio, None
 
-            transcriber = Transcriber(
-                provider=provider,
-                input_dir=input_dir,
-                output_dir=output_dir,
-                ffmpeg_checker=lambda: True,
-                audio_validator=audio_validator,
-                audio_converter=audio_converter,
-                result_writer=lambda result, _: written_results.append(result),
-            )
-            transcriber.process_files()
+            def run_test() -> None:
+                transcriber = Transcriber(
+                    provider=provider,
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    ffmpeg_checker=lambda: True,
+                    audio_validator=audio_validator,
+                    audio_converter=audio_converter,
+                    result_writer=lambda result, _: written_results.append(result),
+                )
+                transcriber.process_files()
+
+            self._run_quietly(run_test)
 
             moved_audio = output_dir / "audio" / "clip.mp3"
             self.assertTrue(moved_audio.exists())
@@ -170,20 +184,23 @@ class TranscriberTests(unittest.TestCase):
             audio_file = input_dir / "voice.mp3"
             audio_file.write_bytes(b"audio")
 
-            transcriber = Transcriber(
-                provider=provider,
-                input_dir=input_dir,
-                output_dir=output_dir,
-                ffmpeg_checker=lambda: False,
-                audio_validator=lambda *_: AudioValidation(
-                    is_valid=True,
-                    error_message=None,
-                    needs_conversion=False,
-                ),
-                result_writer=lambda result, _: written_results.append(result),
-                file_mover=lambda *_: (_ for _ in ()).throw(OSError("permiso denegado")),
-            )
-            transcriber.process_files()
+            def run_test() -> None:
+                transcriber = Transcriber(
+                    provider=provider,
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    ffmpeg_checker=lambda: False,
+                    audio_validator=lambda *_: AudioValidation(
+                        is_valid=True,
+                        error_message=None,
+                        needs_conversion=False,
+                    ),
+                    result_writer=lambda result, _: written_results.append(result),
+                    file_mover=lambda *_: (_ for _ in ()).throw(OSError("permiso denegado")),
+                )
+                transcriber.process_files()
+
+            self._run_quietly(run_test)
 
         self.assertEqual(provider.transcribed_files, ["voice.mp3"])
         self.assertEqual(len(written_results), 1)

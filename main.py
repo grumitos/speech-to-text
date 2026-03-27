@@ -35,12 +35,6 @@ def main():
         help="Prompt para mejorar la transcripción",
     )
     parser.add_argument(
-        "--format",
-        default="text",
-        choices=["text", "json"],
-        help="Formato de respuesta (default: text)",
-    )
-    parser.add_argument(
         "--input",
         default=str(DEFAULT_INPUT_DIR),
         help=f"Directorio de entrada (default: {DEFAULT_INPUT_DIR})",
@@ -79,10 +73,7 @@ def main():
         input_dir=input_dir,
         output_dir=output_dir,
     )
-    transcriber.process_files(
-        prompt=args.prompt,
-        response_format=args.format,
-    )
+    transcriber.process_files(prompt=args.prompt)
 
     console.print("\n| Finalizado\n", style=STYLE_INFO)
 

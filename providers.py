@@ -48,7 +48,6 @@ class TranscriptionProvider(ABC):
         audio_path: Path,
         original_filename: str,
         prompt: str = "",
-        response_format: str = "text",
     ) -> TranscriptionResult: ...
 
     @abstractmethod
@@ -99,7 +98,6 @@ class GeminiProvider(TranscriptionProvider):
         audio_path: Path,
         original_filename: str,
         prompt: str = "",
-        response_format: str = "text",
     ) -> TranscriptionResult:
         from google.genai import types
         if self.client is None:
@@ -145,6 +143,7 @@ class GeminiProvider(TranscriptionProvider):
                     return result
 
         return result
+
 
 def get_provider(model: str | None = None) -> TranscriptionProvider:
     return GeminiProvider(model=model)
