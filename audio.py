@@ -113,6 +113,8 @@ def convert_audio(input_path: Path) -> Tuple[Optional[Path], Optional[str]]:
             if final_output.exists():
                 final_output.unlink()
             temp_output.rename(final_output)
+        if not final_output.exists():
+            return None, "FFmpeg finalizó sin generar el archivo convertido."
         return final_output, None
 
     except subprocess.TimeoutExpired:

@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import List
 
 from config import (
-    OPENAI_FILE_LIMIT_MB,
+    AVAILABLE_GEMINI_MODELS,
+    DEFAULT_GEMINI_MODEL,
     GEMINI_INLINE_LIMIT_MB,
     MAX_RETRIES,
     RETRY_BASE_DELAY,
-    PROVIDER_MODELS,
 )
 from models import TranscriptionResult
 
@@ -61,99 +61,14 @@ class TranscriptionProvider(ABC):
     def current_model(self) -> str: ...
 
 
-class OpenAIProvider(TranscriptionProvider):
-    name = "openai"
-
-    def __init__(self, model: str | None = None):
-        self.model_name = model or PROVIDER_MODELS["openai"]["default"]
-        self.client = None
-
-    def initialize(self) -> None:
-        import openai
-
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY no configurada. Añádela al archivo .env")
-
-        try:
-            self.client = openai.OpenAI(api_key=api_key)
-            self.client.models.list()
-        except openai.AuthenticationError:
-            raise ValueError("API Key de OpenAI no válida.")
-
-    def available_models(self) -> List[str]:
-        return PROVIDER_MODELS["openai"]["models"]
-
-    def max_file_size_mb(self) -> float:
-        return OPENAI_FILE_LIMIT_MB
-
-    def current_model(self) -> str:
-        return self.model_name
-
-    def transcribe(
-        self,
-        audio_path: Path,
-        original_filename: str,
-        prompt: str = "",
-        response_format: str = "text",
-    ) -> TranscriptionResult:
-        import openai
-        if self.client is None:
-            raise RuntimeError("OpenAIProvider no inicializado. Llama a initialize() primero.")
-
-        result = TranscriptionResult(
-            file_name=original_filename,
-            date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            transcription_text="",
-            model_name=self.model_name,
-            provider_name=self.name,
-        )
-
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                start = time.time()
-                with open(audio_path, "rb") as audio_file:
-                    response = self.client.audio.transcriptions.create(
-                        file=audio_file,
-                        model=self.model_name,
-                        prompt=prompt or None,
-                        response_format=response_format,
-                    )
-                result.transcription_time = time.time() - start
-
-                if isinstance(response, str):
-                    result.transcription_text = response
-                elif hasattr(response, "text"):
-                    result.transcription_text = response.text
-                else:
-                    result.transcription_text = str(response)
-
-                return result
-
-            except openai.RateLimitError:
-                if attempt < MAX_RETRIES:
-                    delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                    time.sleep(delay)
-                else:
-                    result.error = "Rate limit excedido tras múltiples reintentos."
-                    return result
-
-            except openai.BadRequestError as e:
-                result.error = f"Bad Request: {e}"
-                return result
-
-            except Exception as e:
-                result.error = f"Error: {e}"
-                return result
-
-        return result
-
-
 class GeminiProvider(TranscriptionProvider):
     name = "gemini"
 
     def __init__(self, model: str | None = None):
-        self.model_name = model or PROVIDER_MODELS["gemini"]["default"]
+        self.model_name = model or DEFAULT_GEMINI_MODEL
+        if self.model_name not in AVAILABLE_GEMINI_MODELS:
+            available = ", ".join(AVAILABLE_GEMINI_MODELS)
+            raise ValueError(f"Modelo '{self.model_name}' no soportado. Disponible: {available}")
         self.client = None
 
     def initialize(self) -> None:
@@ -171,7 +86,7 @@ class GeminiProvider(TranscriptionProvider):
             raise ValueError(f"Error inicializando Gemini: {e}")
 
     def available_models(self) -> List[str]:
-        return PROVIDER_MODELS["gemini"]["models"]
+        return AVAILABLE_GEMINI_MODELS
 
     def max_file_size_mb(self) -> float:
         return GEMINI_INLINE_LIMIT_MB
@@ -231,16 +146,5 @@ class GeminiProvider(TranscriptionProvider):
 
         return result
 
-
-PROVIDERS = {
-    "gemini": GeminiProvider,
-    "openai": OpenAIProvider,
-}
-
-
-def get_provider(name: str, model: str | None = None) -> TranscriptionProvider:
-    cls = PROVIDERS.get(name)
-    if cls is None:
-        available = ", ".join(PROVIDERS.keys())
-        raise ValueError(f"Proveedor '{name}' no encontrado. Disponibles: {available}")
-    return cls(model=model)
+def get_provider(model: str | None = None) -> TranscriptionProvider:
+    return GeminiProvider(model=model)

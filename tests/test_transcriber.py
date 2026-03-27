@@ -113,6 +113,83 @@ class TranscriberTests(unittest.TestCase):
         self.assertEqual(len(written_results), 1)
         self.assertIsNone(written_results[0].error)
 
+    def test_transcribes_converted_audio_preserving_original_name(self) -> None:
+        written_results: List[TranscriptionResult] = []
+        provider = FakeProvider()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            input_dir = base / "in"
+            output_dir = base / "out"
+            input_dir.mkdir()
+            output_dir.mkdir()
+            original_audio = input_dir / "clip.wav"
+            original_audio.write_bytes(b"wav-audio")
+
+            def audio_validator(file_path: Path, *_args) -> AudioValidation:
+                return AudioValidation(
+                    is_valid=True,
+                    error_message=None,
+                    needs_conversion=file_path.suffix.lower() != ".mp3",
+                )
+
+            def audio_converter(_path: Path):
+                converted_audio = input_dir / "clip.mp3"
+                converted_audio.write_bytes(b"mp3-audio")
+                return converted_audio, None
+
+            transcriber = Transcriber(
+                provider=provider,
+                input_dir=input_dir,
+                output_dir=output_dir,
+                ffmpeg_checker=lambda: True,
+                audio_validator=audio_validator,
+                audio_converter=audio_converter,
+                result_writer=lambda result, _: written_results.append(result),
+            )
+            transcriber.process_files()
+
+            moved_audio = output_dir / "audio" / "clip.mp3"
+            self.assertTrue(moved_audio.exists())
+            self.assertFalse(original_audio.exists())
+
+        self.assertEqual(provider.transcribed_files, ["clip.wav"])
+        self.assertEqual(len(written_results), 1)
+        self.assertEqual(written_results[0].file_name, "clip.wav")
+
+    def test_records_move_failures_as_postprocess_warning(self) -> None:
+        written_results: List[TranscriptionResult] = []
+        provider = FakeProvider()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            input_dir = base / "in"
+            output_dir = base / "out"
+            input_dir.mkdir()
+            output_dir.mkdir()
+            audio_file = input_dir / "voice.mp3"
+            audio_file.write_bytes(b"audio")
+
+            transcriber = Transcriber(
+                provider=provider,
+                input_dir=input_dir,
+                output_dir=output_dir,
+                ffmpeg_checker=lambda: False,
+                audio_validator=lambda *_: AudioValidation(
+                    is_valid=True,
+                    error_message=None,
+                    needs_conversion=False,
+                ),
+                result_writer=lambda result, _: written_results.append(result),
+                file_mover=lambda *_: (_ for _ in ()).throw(OSError("permiso denegado")),
+            )
+            transcriber.process_files()
+
+        self.assertEqual(provider.transcribed_files, ["voice.mp3"])
+        self.assertEqual(len(written_results), 1)
+        self.assertIsNone(written_results[0].error)
+        self.assertIn("permiso denegado", written_results[0].postprocess_warning or "")
+
 
 if __name__ == "__main__":
     unittest.main()

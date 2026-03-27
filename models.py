@@ -12,3 +12,4 @@ class TranscriptionResult:
     transcription_time: float = 0.0
     error: Optional[str] = None
     conversion_error: Optional[str] = None
+    postprocess_warning: Optional[str] = None

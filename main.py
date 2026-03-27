@@ -2,8 +2,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from config import DEFAULT_INPUT_DIR, DEFAULT_OUTPUT_DIR, PROVIDER_MODELS
-from providers import get_provider, PROVIDERS
+from config import (
+    AVAILABLE_GEMINI_MODELS,
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_INPUT_DIR,
+    DEFAULT_OUTPUT_DIR,
+)
+from providers import get_provider
 from transcriber import Transcriber
 from ui import console, style_error, style_keyword, STYLE_INFO, STYLE_ERROR, STYLE_DEFAULT, STYLE_SUCCESS
 
@@ -16,18 +21,13 @@ def main():
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Transcribe archivos de audio usando OpenAI o Google Gemini"
-    )
-    parser.add_argument(
-        "--provider",
-        default="gemini",
-        choices=list(PROVIDERS.keys()),
-        help="Proveedor de transcripción (default: gemini)",
+        description="Transcribe archivos de audio usando Google Gemini"
     )
     parser.add_argument(
         "--model",
-        default=None,
-        help="Modelo específico (default: auto según proveedor)",
+        default=DEFAULT_GEMINI_MODEL,
+        choices=AVAILABLE_GEMINI_MODELS,
+        help=f"Modelo de transcripción (default: {DEFAULT_GEMINI_MODEL})",
     )
     parser.add_argument(
         "--prompt",
@@ -54,15 +54,14 @@ def main():
 
     console.print("| Iniciando SpeechToText", style=STYLE_INFO)
 
-    # Mostrar modelos disponibles
-    provider_info = PROVIDER_MODELS.get(args.provider, {})
-    models = provider_info.get("models", [])
-    if models:
-        model_list = ", ".join(models)
-        console.print(f"| Proveedor: {style_keyword(args.provider)} | Modelos: {model_list}", style=STYLE_DEFAULT)
+    model_list = ", ".join(AVAILABLE_GEMINI_MODELS)
+    console.print(
+        f"| Proveedor: {style_keyword('gemini')} | Modelos: {model_list}",
+        style=STYLE_DEFAULT,
+    )
 
     try:
-        provider = get_provider(args.provider, model=args.model)
+        provider = get_provider(model=args.model)
         provider.initialize()
         console.print(f"| Proveedor inicializado: {style_keyword(provider.name)}", style=STYLE_SUCCESS)
         console.print(f"| Modelo activo: {style_keyword(provider.current_model())}", style=STYLE_DEFAULT)

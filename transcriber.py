@@ -182,7 +182,12 @@ class Transcriber:
                     conv_path, conv_error = future.result()
 
                     if conv_path:
-                        converted_files.append(PreparedFile(conv_path, conv_path))
+                        converted_files.append(
+                            PreparedFile(
+                                original_path=original,
+                                transcribe_path=conv_path,
+                            )
+                        )
                         try:
                             original.unlink()
                             converted_count += 1
@@ -250,8 +255,14 @@ class Transcriber:
                 )
 
                 if result.error is None:
-                    success_count += 1
-                    self._move_processed_audio(file.original_path)
+                    move_error = self._move_processed_audio(file.transcribe_path)
+                    if move_error is None:
+                        success_count += 1
+                    else:
+                        error_count += 1
+                        result.postprocess_warning = (
+                            f"No se pudo mover el audio procesado: {move_error}"
+                        )
                 else:
                     error_count += 1
 
@@ -260,16 +271,20 @@ class Transcriber:
 
         return success_count, error_count
 
-    def _move_processed_audio(self, origin: Path) -> None:
+    def _move_processed_audio(self, origin: Path | None) -> Optional[str]:
+        if origin is None:
+            return "ruta de audio no disponible"
         try:
             destination = self.output_dir / "audio" / origin.name
             destination.parent.mkdir(parents=True, exist_ok=True)
             self.file_mover(str(origin), str(destination))
+            return None
         except Exception as e:
             console.print(
                 f"| {style_error(f'Error al mover {origin.name}:')} {e}",
                 style=STYLE_ERROR,
             )
+            return str(e)
 
     def _print_summary(self, success_count: int, error_count: int) -> None:
         if success_count:

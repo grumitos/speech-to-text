@@ -1,8 +1,40 @@
 import textwrap
 from pathlib import Path
 
-from rich.console import Console
-from rich.progress import Progress, BarColumn, TextColumn
+try:
+    from rich.console import Console
+    from rich.progress import Progress, BarColumn, TextColumn
+    RICH_AVAILABLE = True
+except ModuleNotFoundError:
+    RICH_AVAILABLE = False
+
+    class Console:
+        def print(self, *args, **kwargs) -> None:
+            print(*args)
+
+    class TextColumn:
+        def __init__(self, template: str):
+            self.template = template
+
+    class BarColumn:
+        pass
+
+    class Progress:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self) -> "Progress":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def add_task(self, description: str, total: int = 0) -> int:
+            return 0
+
+        def advance(self, task_id: int, advance: int = 1) -> None:
+            return None
+
 from models import TranscriptionResult
 
 # Consola global
@@ -17,18 +49,26 @@ STYLE_INFO = "cyan"
 
 
 def style_keyword(text: str) -> str:
+    if not RICH_AVAILABLE:
+        return text
     return f"[{STYLE_KEYWORD}]{text}[/{STYLE_KEYWORD}]"
 
 
 def style_success(text: str) -> str:
+    if not RICH_AVAILABLE:
+        return text
     return f"[{STYLE_SUCCESS}]{text}[/{STYLE_SUCCESS}]"
 
 
 def style_error(text: str) -> str:
+    if not RICH_AVAILABLE:
+        return text
     return f"[{STYLE_ERROR}]{text}[/{STYLE_ERROR}]"
 
 
 def style_info(text: str) -> str:
+    if not RICH_AVAILABLE:
+        return text
     return f"[{STYLE_INFO}]{text}[/{STYLE_INFO}]"
 
 
@@ -45,7 +85,7 @@ def make_progress(description: str) -> Progress:
 def write_transcription_file(result: TranscriptionResult, output_dir: Path) -> None:
     msg_dir = output_dir / "msg"
     msg_dir.mkdir(parents=True, exist_ok=True)
-    output_file = msg_dir / f"{Path(result.file_name).stem}.txt"
+    output_file = msg_dir / f"{Path(result.file_name).name}.txt"
 
     try:
         with open(output_file, "w", encoding="utf-8") as f:
@@ -53,6 +93,8 @@ def write_transcription_file(result: TranscriptionResult, output_dir: Path) -> N
             f.write(f"{'=' * 30} 📁{header}{'=' * 30}\n")
             f.write(f"📅 Fecha: {result.date}\n")
             f.write(f"🤖 Modelo: {result.model_name} ({result.provider_name})\n")
+            if result.postprocess_warning:
+                f.write(f"⚠️ ADVERTENCIA: {result.postprocess_warning}\n")
 
             if result.conversion_error:
                 f.write(f"❌ ERROR DE CONVERSIÓN: {result.conversion_error}\n\n")
