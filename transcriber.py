@@ -11,17 +11,20 @@ from config import MAX_CONVERSION_WORKERS, TARGET_FORMAT
 from models import TranscriptionResult
 from providers import TranscriptionProvider
 from ui import (
-    console,
     make_progress,
+    print_bullet,
+    print_kv,
+    print_section,
+    print_state,
     write_transcription_file,
     style_keyword,
     style_success,
     style_error,
-    style_info,
     STYLE_DEFAULT,
     STYLE_SUCCESS,
     STYLE_ERROR,
     STYLE_INFO,
+    STYLE_WARNING,
 )
 
 
@@ -63,19 +66,16 @@ class Transcriber:
         self.ffmpeg_available = ffmpeg_checker()
 
         if self.ffmpeg_available:
-            console.print(f"| FFmpeg disponible", style=STYLE_INFO)
+            print_state("success", "FFmpeg disponible")
         else:
-            console.print(
-                f"| {style_error('Advertencia:')} FFmpeg no encontrado. La conversión de formatos no funcionará.",
-                style=STYLE_ERROR,
-            )
+            print_state("disabled", "FFmpeg no encontrado. La conversión de formatos no funcionará.")
 
     def process_files(self, prompt: str = "") -> None:
         self._print_start(prompt)
 
         all_files = self._collect_audio_files()
         if not all_files:
-            console.print("| No se encontraron archivos de audio en el directorio de entrada.", style=STYLE_INFO)
+            print_state("empty", "No se encontraron archivos de audio en el directorio de entrada.")
             return
 
         self._cleanup_temp_files()
@@ -83,7 +83,7 @@ class Transcriber:
         prepared_files.extend(self._convert_files(files_needing_conversion))
 
         if not prepared_files:
-            console.print("\n| No hay archivos válidos para transcribir.", style=STYLE_INFO)
+            print_state("empty", "No hay archivos válidos para transcribir.")
             return
 
         conversion_errors = [f for f in prepared_files if f.error_message]
@@ -100,11 +100,12 @@ class Transcriber:
         self._print_summary(success_count=success_count, error_count=error_count)
 
     def _print_start(self, prompt: str) -> None:
-        console.print(f"\n| Iniciando procesamiento con {style_keyword(self.provider.name)}", style=STYLE_INFO)
+        print_section("Procesamiento")
+        print_kv("Proveedor", self.provider.name, STYLE_INFO)
         if prompt:
-            console.print(f"| Prompt: {style_keyword(prompt)}", style=STYLE_INFO)
-        console.print(f"| Entrada: {self.input_dir}", style=STYLE_DEFAULT)
-        console.print(f"| Salida:  {self.output_dir}", style=STYLE_DEFAULT)
+            print_kv("Prompt", prompt, STYLE_DEFAULT)
+        print_kv("Entrada", self.input_dir)
+        print_kv("Salida", self.output_dir)
 
     def _collect_audio_files(self) -> List[Path]:
         return sorted((f for f in self.input_dir.iterdir() if is_audio_file(f)), key=lambda p: p.name.lower())
@@ -117,7 +118,7 @@ class Transcriber:
                 pass
 
     def _validate_files(self, all_files: List[Path]) -> Tuple[List[PreparedFile], List[Path]]:
-        console.print(f"\n| Fase 1: Validando {len(all_files)} archivos...", style=STYLE_INFO)
+        print_section(f"Fase 1 / Validación ({len(all_files)} archivos)")
         prepared_files: List[PreparedFile] = []
         files_needing_conversion: List[Path] = []
         invalid_messages: List[str] = []
@@ -130,7 +131,7 @@ class Transcriber:
                 validation = self.audio_validator(file_path, max_size, self.ffmpeg_available)
 
                 if validation.warning_message:
-                    warning_messages.append(f"|   - {validation.warning_message}")
+                    warning_messages.append(validation.warning_message)
 
                 if validation.is_valid:
                     if validation.needs_conversion:
@@ -138,30 +139,28 @@ class Transcriber:
                     else:
                         prepared_files.append(PreparedFile(file_path, file_path))
                 else:
-                    invalid_messages.append(f"|   - {file_path.name}: {validation.error_message}")
+                    invalid_messages.append(f"{file_path.name}: {validation.error_message}")
                 progress.advance(task)
 
         if warning_messages:
-            console.print(f"\n| {style_info('Advertencias de validación:')}", style=STYLE_INFO)
+            print_state("warning", "Advertencias de validación")
             for msg in warning_messages:
-                console.print(msg, style=STYLE_INFO)
+                print_bullet(msg, STYLE_WARNING)
 
         if invalid_messages:
-            console.print(f"\n| {style_error('Archivos omitidos:')}", style=STYLE_ERROR)
+            print_state("error", "Archivos omitidos")
             for msg in invalid_messages:
-                console.print(msg, style=STYLE_ERROR)
+                print_bullet(msg, STYLE_ERROR)
 
         return prepared_files, files_needing_conversion
 
     def _convert_files(self, files_needing_conversion: List[Path]) -> List[PreparedFile]:
         if not files_needing_conversion:
-            console.print("\n| Fase 2: No se requiere conversión.", style=STYLE_INFO)
+            print_section("Fase 2 / Conversión")
+            print_state("disabled", "No se requiere conversión.")
             return []
 
-        console.print(
-            f"\n| Fase 2: Convirtiendo {len(files_needing_conversion)} archivos a {TARGET_FORMAT}...",
-            style=STYLE_INFO,
-        )
+        print_section(f"Fase 2 / Conversión ({len(files_needing_conversion)} archivos a {TARGET_FORMAT})")
 
         converted_files: List[PreparedFile] = []
         converted_count = 0
@@ -191,10 +190,7 @@ class Transcriber:
                             original.unlink()
                             converted_count += 1
                         except Exception as e:
-                            console.print(
-                                f"| {style_error(f'Error al eliminar {original.name}:')} {e}",
-                                style=STYLE_ERROR,
-                            )
+                            print_state("error", f"Error al eliminar {original.name}: {e}")
                     else:
                         converted_files.append(
                             PreparedFile(
@@ -208,9 +204,9 @@ class Transcriber:
                     progress.advance(task)
 
         if converted_count:
-            console.print(f"| {style_success('Convertidos:')} {converted_count} archivos", style=STYLE_SUCCESS)
+            print_state("success", f"Convertidos: {converted_count} archivos")
         if failed_count:
-            console.print(f"| {style_error('Fallos:')} {failed_count} archivos", style=STYLE_ERROR)
+            print_state("error", f"Fallos: {failed_count} archivos")
 
         return converted_files
 
@@ -230,10 +226,8 @@ class Transcriber:
         valid_files: List[PreparedFile],
         prompt: str,
     ) -> Tuple[int, int]:
-        console.print(
-            f"\n| Fase 3: Transcribiendo {len(valid_files)} archivos con {style_keyword(self.provider.name)}...",
-            style=STYLE_INFO,
-        )
+        print_section(f"Fase 3 / Transcripción ({len(valid_files)} archivos)")
+        print_kv("Proveedor", self.provider.name, STYLE_INFO)
 
         success_count = 0
         error_count = 0
@@ -277,18 +271,13 @@ class Transcriber:
             self.file_mover(str(origin), str(destination))
             return None
         except Exception as e:
-            console.print(
-                f"| {style_error(f'Error al mover {origin.name}:')} {e}",
-                style=STYLE_ERROR,
-            )
+            print_state("error", f"Error al mover {origin.name}: {e}")
             return str(e)
 
     def _print_summary(self, success_count: int, error_count: int) -> None:
+        print_section("Resumen")
         if success_count:
-            console.print(f"\n| {style_success('Transcripciones exitosas:')} {success_count} archivos", style=STYLE_SUCCESS)
+            print_state("success", f"Transcripciones exitosas: {success_count} archivos")
         if error_count:
-            console.print(f"| {style_error('Transcripciones fallidas:')} {error_count} archivos", style=STYLE_ERROR)
-        console.print(
-            f"\n| Proceso completado. Revisa '{self.output_dir / 'msg'}' para las transcripciones.",
-            style=STYLE_SUCCESS,
-        )
+            print_state("error", f"Transcripciones fallidas: {error_count} archivos")
+        print_kv("Salida de textos", self.output_dir / "msg", STYLE_SUCCESS)

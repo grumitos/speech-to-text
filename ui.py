@@ -3,21 +3,45 @@ from pathlib import Path
 
 try:
     from rich.console import Console
-    from rich.progress import Progress, BarColumn, TextColumn
+    from rich.markup import escape as rich_escape
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
     RICH_AVAILABLE = True
 except ModuleNotFoundError:
     RICH_AVAILABLE = False
 
     class Console:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
         def print(self, *args, **kwargs) -> None:
             print(*args)
 
     class TextColumn:
-        def __init__(self, template: str):
+        def __init__(self, template: str, *args, **kwargs):
             self.template = template
 
     class BarColumn:
-        pass
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+    class MofNCompleteColumn:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+    class SpinnerColumn:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+    class TimeElapsedColumn:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
 
     class Progress:
         def __init__(self, *args, **kwargs):
@@ -37,46 +61,143 @@ except ModuleNotFoundError:
 
 from models import TranscriptionResult
 
-# Consola global
-console = Console()
+LIGHT_TOKENS = {
+    "canvas": "#f8f8f6",
+    "text": "#121212",
+    "surface": "#ffffff",
+    "secondary": "#efeeeb",
+    "muted": "#7b7974",
+    "border": "#1f1f1e26",
+    "border_solid": "#d9d8d5",
+    "accent": "#d97757",
+    "focus": "#2977d6",
+}
 
-# Estilos
-STYLE_DEFAULT = "white"
-STYLE_KEYWORD = "bright_magenta"
-STYLE_SUCCESS = "bright_green"
-STYLE_ERROR = "red"
-STYLE_INFO = "cyan"
+DARK_TOKENS = {
+    "canvas": "#1f1f1e",
+    "text": "#f8f8f6",
+    "surface": "#121212",
+    "surface_elevated": "#2c2c2a",
+    "muted": "#97958c",
+    "border": "#e2e1da26",
+    "border_solid": "#333331",
+    "accent": "#d97757",
+    "focus": "#3886e5",
+}
+
+UI_MODE = "dark"
+UI_TOKENS = DARK_TOKENS
+
+STYLE_DEFAULT = UI_TOKENS["text"]
+STYLE_KEYWORD = f"bold {UI_TOKENS['accent']}"
+STYLE_SUCCESS = "bold #74a47f"
+STYLE_ERROR = "bold #d76b63"
+STYLE_WARNING = "bold #c99746"
+STYLE_INFO = UI_TOKENS["focus"]
+STYLE_MUTED = UI_TOKENS["muted"]
+STYLE_DISABLED = f"dim {UI_TOKENS['muted']}"
+STYLE_BORDER = UI_TOKENS["border_solid"]
+
+STATE_LABELS = {
+    "info": "INFO",
+    "success": "OK",
+    "warning": "AVISO",
+    "error": "ERROR",
+    "empty": "VACIO",
+    "disabled": "OFF",
+    "loading": "RUN",
+}
+
+STATE_STYLES = {
+    "info": STYLE_INFO,
+    "success": STYLE_SUCCESS,
+    "warning": STYLE_WARNING,
+    "error": STYLE_ERROR,
+    "empty": STYLE_MUTED,
+    "disabled": STYLE_DISABLED,
+    "loading": STYLE_KEYWORD,
+}
+
+console = Console(highlight=False)
+
+
+def escape_markup(text: object) -> str:
+    raw = str(text)
+    if not RICH_AVAILABLE:
+        return raw
+    return rich_escape(raw)
+
+
+def style_text(text: object, style: str) -> str:
+    if not RICH_AVAILABLE:
+        return str(text)
+    return f"[{style}]{escape_markup(text)}[/]"
 
 
 def style_keyword(text: str) -> str:
-    if not RICH_AVAILABLE:
-        return text
-    return f"[{STYLE_KEYWORD}]{text}[/{STYLE_KEYWORD}]"
+    return style_text(text, STYLE_KEYWORD)
 
 
 def style_success(text: str) -> str:
-    if not RICH_AVAILABLE:
-        return text
-    return f"[{STYLE_SUCCESS}]{text}[/{STYLE_SUCCESS}]"
+    return style_text(text, STYLE_SUCCESS)
 
 
 def style_error(text: str) -> str:
-    if not RICH_AVAILABLE:
-        return text
-    return f"[{STYLE_ERROR}]{text}[/{STYLE_ERROR}]"
+    return style_text(text, STYLE_ERROR)
 
 
 def style_info(text: str) -> str:
-    if not RICH_AVAILABLE:
-        return text
-    return f"[{STYLE_INFO}]{text}[/{STYLE_INFO}]"
+    return style_text(text, STYLE_INFO)
+
+
+def style_warning(text: str) -> str:
+    return style_text(text, STYLE_WARNING)
+
+
+def style_muted(text: str) -> str:
+    return style_text(text, STYLE_MUTED)
+
+
+def _state_badge(state: str) -> str:
+    label = STATE_LABELS.get(state, state.upper())
+    style = STATE_STYLES.get(state, STYLE_INFO)
+    return style_text(f"[{label}]", style)
+
+
+def print_section(title: str) -> None:
+    console.print(f"\n| {style_text(title, STYLE_KEYWORD)}", style=STYLE_DEFAULT)
+
+
+def print_state(state: str, message: object) -> None:
+    console.print(
+        f"| {_state_badge(state)} {escape_markup(message)}",
+        style=STYLE_DEFAULT,
+    )
+
+
+def print_kv(label: str, value: object, value_style: str = STYLE_DEFAULT) -> None:
+    console.print(
+        f"| {style_muted(label + ':')} {style_text(value, value_style)}",
+        style=STYLE_DEFAULT,
+    )
+
+
+def print_bullet(message: object, style: str = STYLE_DEFAULT) -> None:
+    console.print(f"|   - {escape_markup(message)}", style=style)
 
 
 def make_progress(description: str) -> Progress:
     return Progress(
-        TextColumn(description),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total}"),
+        SpinnerColumn(style=STYLE_KEYWORD),
+        TextColumn(description, style=STYLE_MUTED),
+        BarColumn(
+            bar_width=24,
+            complete_style=UI_TOKENS["accent"],
+            finished_style=STYLE_SUCCESS,
+            pulse_style=STYLE_INFO,
+        ),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
         console=console,
         transient=True,
     )
@@ -90,22 +211,22 @@ def write_transcription_file(result: TranscriptionResult, output_dir: Path) -> N
     try:
         with open(output_file, "w", encoding="utf-8") as f:
             header = f" {result.file_name} "
-            f.write(f"{'=' * 30} 📁{header}{'=' * 30}\n")
-            f.write(f"📅 Fecha: {result.date}\n")
-            f.write(f"🤖 Modelo: {result.model_name} ({result.provider_name})\n")
+            f.write(f"{'=' * 30} {header}{'=' * 30}\n")
+            f.write(f"Fecha: {result.date}\n")
+            f.write(f"Modelo: {result.model_name} ({result.provider_name})\n")
             if result.postprocess_warning:
-                f.write(f"⚠️ ADVERTENCIA: {result.postprocess_warning}\n")
+                f.write(f"ADVERTENCIA: {result.postprocess_warning}\n")
 
             if result.conversion_error:
-                f.write(f"❌ ERROR DE CONVERSIÓN: {result.conversion_error}\n\n")
+                f.write(f"ERROR DE CONVERSION: {result.conversion_error}\n\n")
             elif result.error:
-                f.write(f"❌ ERROR DE TRANSCRIPCIÓN: {result.error}\n\n")
+                f.write(f"ERROR DE TRANSCRIPCION: {result.error}\n\n")
             else:
-                f.write(f"\n📝 TRANSCRIPCIÓN:\n")
+                f.write("\nTRANSCRIPCION:\n")
                 f.write("-" * 85 + "\n")
                 f.write(textwrap.fill(result.transcription_text, width=80) + "\n")
                 f.write("-" * 85 + "\n")
             f.write("\n\n")
-        console.print(f"| Transcripción guardada en: {output_file}", style=STYLE_SUCCESS)
+        print_state("success", f"Transcripcion guardada: {output_file}")
     except Exception as e:
-        console.print(f"| {style_error(f'Error al escribir en {output_file}:')} {e}", style=STYLE_ERROR)
+        print_state("error", f"Error al escribir en {output_file}: {e}")
