@@ -18,8 +18,6 @@ from ui import (
     print_state,
     write_transcription_file,
     style_keyword,
-    style_success,
-    style_error,
     STYLE_DEFAULT,
     STYLE_SUCCESS,
     STYLE_ERROR,

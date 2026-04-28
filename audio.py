@@ -37,7 +37,7 @@ def get_duration(file_path: Path) -> Optional[float]:
         if match:
             h, m, s = int(match.group(1)), int(match.group(2)), float(match.group(3))
             return h * 3600 + m * 60 + s
-    except (subprocess.TimeoutExpired, Exception):
+    except (subprocess.TimeoutExpired, OSError):
         pass
     return None
 
@@ -93,13 +93,13 @@ def validate_audio(
 
 
 def convert_audio(input_path: Path) -> Tuple[Optional[Path], Optional[str]]:
-    temp_output = input_path.parent / f"{input_path.stem}_temp{TARGET_FORMAT}"
-    final_output = input_path.parent / f"{input_path.stem}{TARGET_FORMAT}"
+    final_output = _converted_output_path(input_path)
+    temp_output = input_path.parent / f"{final_output.stem}_temp{TARGET_FORMAT}"
 
     command = [
-        "ffmpeg", "-i", str(input_path), "-vn",
+        "ffmpeg", "-y", "-i", str(input_path), "-vn",
         "-c:a", "libmp3lame", "-b:a", "128k",
-        str(temp_output), "-y", "-hide_banner", "-loglevel", "error",
+        str(temp_output), "-hide_banner", "-loglevel", "error",
     ]
     try:
         subprocess.run(
@@ -110,8 +110,6 @@ def convert_audio(input_path: Path) -> Tuple[Optional[Path], Optional[str]]:
             timeout=FFMPEG_TIMEOUT_SEC,
         )
         if temp_output.exists():
-            if final_output.exists():
-                final_output.unlink()
             temp_output.rename(final_output)
         if not final_output.exists():
             return None, "FFmpeg finalizó sin generar el archivo convertido."
@@ -126,7 +124,8 @@ def convert_audio(input_path: Path) -> Tuple[Optional[Path], Optional[str]]:
 
     except subprocess.CalledProcessError as e:
         _cleanup(temp_output)
-        return None, f"FFmpeg falló: {e.stderr.strip()}"
+        stderr = (e.stderr or "").strip()
+        return None, f"FFmpeg falló: {stderr or e}"
 
     except Exception as e:
         _cleanup(temp_output)
@@ -139,3 +138,18 @@ def _cleanup(path: Path) -> None:
             path.unlink()
     except OSError:
         pass
+
+
+def _converted_output_path(input_path: Path) -> Path:
+    source_suffix = input_path.suffix.lower().lstrip(".") or "audio"
+    base_name = f"{input_path.stem}.{source_suffix}{TARGET_FORMAT}"
+    candidate = input_path.with_name(base_name)
+    counter = 1
+
+    while candidate.exists():
+        candidate = input_path.with_name(
+            f"{input_path.stem}.{source_suffix}.{counter}{TARGET_FORMAT}"
+        )
+        counter += 1
+
+    return candidate

@@ -1,8 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from audio import validate_audio
+from audio import convert_audio, validate_audio
 
 
 class AudioValidationTests(unittest.TestCase):
@@ -41,6 +42,26 @@ class AudioValidationTests(unittest.TestCase):
 
             self.assertFalse(result.is_valid)
             self.assertIn("Audio demasiado corto", result.error_message or "")
+
+    def test_convert_audio_does_not_overwrite_existing_target_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source_path = base / "sample.wav"
+            existing_target = base / "sample.mp3"
+            source_path.write_bytes(b"source")
+            existing_target.write_bytes(b"existing")
+
+            def fake_run(command, **_kwargs):
+                output_path = Path(command[command.index("128k") + 1])
+                output_path.write_bytes(b"converted")
+
+            with patch("audio.subprocess.run", side_effect=fake_run):
+                converted_path, error = convert_audio(source_path)
+
+            self.assertIsNone(error)
+            self.assertEqual(existing_target.read_bytes(), b"existing")
+            self.assertEqual(converted_path, base / "sample.wav.mp3")
+            self.assertEqual(converted_path.read_bytes(), b"converted")
 
 
 if __name__ == "__main__":

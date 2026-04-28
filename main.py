@@ -13,7 +13,7 @@ from transcriber import Transcriber
 from ui import console, style_error, style_keyword, STYLE_INFO, STYLE_ERROR, STYLE_DEFAULT, STYLE_SUCCESS
 
 
-def main():
+def main() -> int:
     import warnings
     import argparse
 
@@ -61,7 +61,7 @@ def main():
         console.print(f"| Modelo activo: {style_keyword(provider.current_model())}", style=STYLE_DEFAULT)
     except ValueError as e:
         console.print(f"\n| {style_error('Error:')} {e}\n", style=STYLE_ERROR)
-        return
+        return 1
 
     input_dir = Path(args.input)
     output_dir = Path(args.output)
@@ -76,14 +76,19 @@ def main():
     transcriber.process_files(prompt=args.prompt)
 
     console.print("\n| Finalizado\n", style=STYLE_INFO)
+    return 0
 
 
 if __name__ == "__main__":
     try:
-        main()
+        raise SystemExit(main())
     except KeyboardInterrupt:
         console.print("\n| Interrumpido por el usuario.\n", style=STYLE_INFO)
+        raise SystemExit(130)
     except Exception as e:
         console.print(f"\n| {style_error('Error crítico:')} {e}\n", style=STYLE_ERROR)
-        import traceback
-        traceback.print_exc()
+        import os
+        if os.getenv("SPEECH_TO_TEXT_DEBUG") == "1":
+            import traceback
+            traceback.print_exc()
+        raise SystemExit(1)
