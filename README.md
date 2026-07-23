@@ -2,9 +2,15 @@
 
 CLI local para transcribir archivos de audio con Google Gemini.
 
+## Estado del proyecto
+
+**En desarrollo activo.** El flujo por lotes, la conversion de audio y la suite de pruebas son funcionales. La integracion de IA es intencionalmente acotada a Gemini y utiliza un modelo preview configurable, por lo que puede requerir ajustes cuando cambie la disponibilidad del proveedor.
+
 El flujo actual toma archivos desde un directorio de entrada, valida formato/tamano,
 convierte a MP3 cuando hace falta, envia el audio al modelo Gemini configurado y guarda
 las transcripciones como archivos `.txt` en el directorio de salida.
+
+Los audios y transcripciones permanecen en directorios locales ignorados por Git. El audio se envia a Google Gemini unicamente para ejecutar la transcripcion solicitada.
 
 ## Requisitos
 
