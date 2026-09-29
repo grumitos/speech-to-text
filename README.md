@@ -124,3 +124,7 @@ python -m unittest discover -s tests
 - `models.py`: resultado de una transcripción.
 - `run.bat`: lanzador para Windows que prepara el entorno la primera vez.
 - `tests/`: pruebas de validación, conversión, proveedor, flujo completo y salidas.
+
+## Licencia
+
+[MIT](LICENSE).
