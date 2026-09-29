@@ -21,10 +21,10 @@ class GeminiModel:
 
 
 GEMINI_FILES_API_LIMIT_MB = 2048  # límite por archivo de la Files API
-GEMINI_TRANSCRIBE_MAX_DURATION_SEC = 60 * 60
-# Los modelos flash aceptan hasta 9,5 h por petición, pero solo devuelven 65 536 tokens de
-# salida (unas 4-5 h de habla): con tramos de 2 h la transcripción nunca se trunca.
-GEMINI_FLASH_MAX_DURATION_SEC = 2 * 60 * 60
+# Duración máxima por petición. La documentación admite mucho más (1 h el modelo dedicado, 9,5 h
+# los flash), pero con audios de más de ~30 min la calidad cae: el modelo dedicado añade texto
+# repetido al final y los flash se saltan partes. Con tramos de ~25 min salen completos.
+GEMINI_MAX_DURATION_SEC = 30 * 60
 
 # Configuración de Gemini
 GEMINI_MODELS = {
@@ -34,19 +34,19 @@ GEMINI_MODELS = {
             id="gemini-3.5-transcribe",
             dedicated_transcriber=True,
             max_file_size_mb=GEMINI_FILES_API_LIMIT_MB,
-            max_duration_sec=GEMINI_TRANSCRIBE_MAX_DURATION_SEC,
+            max_duration_sec=GEMINI_MAX_DURATION_SEC,
         ),
         GeminiModel(
             id="gemini-3.8-flash",
             dedicated_transcriber=False,
             max_file_size_mb=GEMINI_FILES_API_LIMIT_MB,
-            max_duration_sec=GEMINI_FLASH_MAX_DURATION_SEC,
+            max_duration_sec=GEMINI_MAX_DURATION_SEC,
         ),
         GeminiModel(
             id="gemini-3.5-flash-lite",
             dedicated_transcriber=False,
             max_file_size_mb=GEMINI_FILES_API_LIMIT_MB,
-            max_duration_sec=GEMINI_FLASH_MAX_DURATION_SEC,
+            max_duration_sec=GEMINI_MAX_DURATION_SEC,
         ),
     )
 }
@@ -93,8 +93,11 @@ MAX_CONVERSION_WORKERS = 8
 REQUEST_TIMEOUT_SEC = 15 * 60  # por petición HTTP; sin esto una conexión colgada bloquea el lote
 FILE_PROCESSING_TIMEOUT_SEC = 10 * 60  # espera a que la Files API deje el archivo en ACTIVE
 FILE_POLL_INTERVAL_SEC = 2
-MAX_RETRIES = 3
-RETRY_BASE_DELAY = 2  # segundos
+MAX_RETRIES = 5  # intentos totales ante errores transitorios del servidor
+RETRY_BASE_DELAY = 5  # segundos; se duplica en cada intento
+RETRYABLE_STATUS_CODES = [408, 500, 502, 503, 504]  # el 429 lo gestiona el proveedor
+RATE_LIMIT_RETRIES = 3  # reintentos ante un 429 por límite de tasa por minuto
+RATE_LIMIT_MAX_WAIT_SEC = 120  # tope de espera que se acepta de la API
 
 # Directorios por defecto
 DEFAULT_INPUT_DIR = Path("entrada")

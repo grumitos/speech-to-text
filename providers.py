@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from config import (
     AVAILABLE_GEMINI_MODELS,
@@ -16,8 +16,11 @@ from config import (
     GEMINI_MODELS,
     MAX_RETRIES,
     NATIVE_AUDIO_MIME_TYPES,
+    RATE_LIMIT_MAX_WAIT_SEC,
+    RATE_LIMIT_RETRIES,
     REQUEST_TIMEOUT_SEC,
     RETRY_BASE_DELAY,
+    RETRYABLE_STATUS_CODES,
 )
 from models import TranscriptionResult
 
@@ -76,10 +79,14 @@ class GeminiProvider(TranscriptionProvider):
         if not api_key or api_key == PLACEHOLDER_API_KEY:
             raise ValueError("GOOGLE_API_KEY no configurada. Añádela al archivo .env")
 
-        # El SDK ni reintenta ni aplica timeout por defecto: sin esto un 429/503 pasajero fallaría
+        # El SDK ni reintenta ni aplica timeout por defecto: sin esto un 503 pasajero fallaría
         # el archivo y una conexión colgada bloquearía el lote entero.
         http_options = types.HttpOptions(
-            retry_options=types.HttpRetryOptions(attempts=MAX_RETRIES, initial_delay=RETRY_BASE_DELAY),
+            retry_options=types.HttpRetryOptions(
+                attempts=MAX_RETRIES,
+                initial_delay=RETRY_BASE_DELAY,
+                http_status_codes=RETRYABLE_STATUS_CODES,
+            ),
             timeout=REQUEST_TIMEOUT_SEC * 1000,  # milisegundos
         )
         self.client = genai.Client(api_key=api_key, http_options=http_options)
@@ -154,13 +161,25 @@ class GeminiProvider(TranscriptionProvider):
                 config = types.GenerateContentConfig(
                     automatic_function_calling=NO_AUTOMATIC_FUNCTION_CALLING,
                 )
-            return self.client.models.generate_content(
-                model=self.model_name,
-                contents=contents,
-                config=config,
-            )
+            return self._generate_content(model=self.model_name, contents=contents, config=config)
         finally:
             self._delete_uploaded(uploaded)
+
+    def _generate_content(self, **request) -> types.GenerateContentResponse:
+        """Reintenta un 429 por límite por minuto esperando lo que indica la API.
+
+        Los tramos de un audio largo se envían seguidos y pueden agotar ese límite: el backoff
+        corto del SDK no alcanza, hay que esperar a que se renueve la ventana.
+        """
+        for attempt in range(RATE_LIMIT_RETRIES + 1):
+            try:
+                return self.client.models.generate_content(**request)
+            except errors.APIError as e:
+                wait = _rate_limit_wait_sec(e)
+                if wait is None or wait > RATE_LIMIT_MAX_WAIT_SEC or attempt == RATE_LIMIT_RETRIES:
+                    raise
+                time.sleep(wait + 1)
+        raise AssertionError("inalcanzable")  # el bucle siempre retorna o relanza
 
     @staticmethod
     def _mime_type_for(audio_path: Path) -> str:
@@ -218,6 +237,29 @@ class GeminiProvider(TranscriptionProvider):
             block_reason = response.prompt_feedback.block_reason
             reason = f"block_reason={getattr(block_reason, 'name', block_reason)}"
         raise ValueError(f"Gemini no devolvió texto ({reason}).")
+
+
+def _rate_limit_wait_sec(error: errors.APIError) -> Optional[float]:
+    """Segundos que pide esperar la API ante un 429 por límite por minuto, o None si no aplica.
+
+    Un límite diario o un 429 sin indicación de espera no se arreglan esperando unos segundos.
+    """
+    if error.code != 429 or not isinstance(error.details, dict):
+        return None
+    details = [d for d in (error.details.get("error") or {}).get("details") or [] if isinstance(d, dict)]
+    per_minute = any(
+        "PerMinute" in (violation.get("quotaId") or "")
+        for detail in details
+        for violation in detail.get("violations") or []
+    )
+    if not per_minute:
+        return None
+    for detail in details:
+        try:
+            return float(str(detail["retryDelay"]).removesuffix("s"))
+        except (KeyError, ValueError):
+            continue
+    return None
 
 
 def get_provider(model: str | None = None) -> TranscriptionProvider:

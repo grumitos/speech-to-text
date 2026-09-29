@@ -10,15 +10,18 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from config import (
     AVAILABLE_GEMINI_MODELS,
     DEFAULT_GEMINI_MODEL,
     GEMINI_FILES_API_LIMIT_MB,
     MAX_RETRIES,
+    RATE_LIMIT_MAX_WAIT_SEC,
+    RATE_LIMIT_RETRIES,
     REQUEST_TIMEOUT_SEC,
     RETRY_BASE_DELAY,
+    RETRYABLE_STATUS_CODES,
 )
 from providers import TRANSCRIPTION_PROMPT, GeminiProvider, get_provider
 
@@ -68,9 +71,10 @@ class ModelCatalogTests(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertEqual(GeminiProvider(model).max_file_size_mb(), GEMINI_FILES_API_LIMIT_MB)
 
-    def test_duration_limits_per_request(self) -> None:
-        self.assertEqual(GeminiProvider(DEDICATED_MODEL).max_duration_sec(), 3600)
-        self.assertEqual(GeminiProvider(PROMPT_MODEL).max_duration_sec(), 7200)
+    def test_every_model_transcribes_at_most_30_minutes_per_request(self) -> None:
+        for model in AVAILABLE_GEMINI_MODELS:
+            with self.subTest(model=model):
+                self.assertEqual(GeminiProvider(model).max_duration_sec(), 30 * 60)
 
 
 class InitializeTests(unittest.TestCase):
@@ -95,6 +99,8 @@ class InitializeTests(unittest.TestCase):
         http_options = client_cls.call_args.kwargs["http_options"]
         self.assertEqual(http_options.retry_options.attempts, MAX_RETRIES)
         self.assertEqual(http_options.retry_options.initial_delay, RETRY_BASE_DELAY)
+        self.assertEqual(http_options.retry_options.http_status_codes, RETRYABLE_STATUS_CODES)
+        self.assertNotIn(429, RETRYABLE_STATUS_CODES)  # los límites de tasa se esperan aparte
         self.assertEqual(http_options.timeout, REQUEST_TIMEOUT_SEC * 1000)
         client_cls.return_value.models.get.assert_called_once_with(model=f"models/{PROMPT_MODEL}")
 
@@ -307,6 +313,61 @@ class TranscribeTests(unittest.TestCase):
 
         self.assertEqual(result.error, "Error: 429 RESOURCE_EXHAUSTED")
         self.assertGreaterEqual(result.transcription_time, 0)
+
+
+def rate_limit_error(quota_id: str = "GenerateContentInputTokensPerModelPerMinute", delay: str | None = "12.5s"):
+    details = [{"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [{"quotaId": quota_id}]}]
+    if delay is not None:
+        details.append({"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": delay})
+    body = {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "límite", "details": details}}
+    return errors.ClientError(429, body)
+
+
+class RateLimitRetryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.audio_path = Path(self._tmp.name) / "voice.mp3"
+        self.audio_path.write_bytes(b"mp3-bytes")
+
+    def _transcribe(self, side_effect):
+        provider = GeminiProvider(DEDICATED_MODEL)
+        provider.client = MagicMock()
+        provider.client.files.upload.return_value = SimpleNamespace(name="files/abc", state=None)
+        provider.client.models.generate_content.side_effect = side_effect
+        with patch("providers.time.sleep") as sleep:
+            result = provider.transcribe(self.audio_path, "voice.mp3")
+        return result, provider.client.models.generate_content.call_count, sleep
+
+    def test_per_minute_limit_waits_for_the_time_the_api_asks_and_retries(self) -> None:
+        result, calls, sleep = self._transcribe([rate_limit_error(), transcription_response("hola")])
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.transcription_text, "hola")
+        self.assertEqual(calls, 2)
+        sleep.assert_called_once_with(13.5)  # 12,5 s pedidos + 1 s de margen
+
+    def test_gives_up_after_the_configured_number_of_retries(self) -> None:
+        result, calls, sleep = self._transcribe([rate_limit_error()] * (RATE_LIMIT_RETRIES + 1))
+
+        self.assertIn("429", result.error or "")
+        self.assertEqual(calls, RATE_LIMIT_RETRIES + 1)
+        self.assertEqual(sleep.call_count, RATE_LIMIT_RETRIES)
+
+    def test_limits_that_waiting_a_few_seconds_cannot_fix_are_not_retried(self) -> None:
+        cases = {
+            "daily": rate_limit_error(quota_id="GenerateRequestsPerDayPerProjectPerModel"),
+            "no wait hint": rate_limit_error(delay=None),
+            "wait too long": rate_limit_error(delay=f"{RATE_LIMIT_MAX_WAIT_SEC + 1}s"),
+            "not a rate limit": errors.ServerError(503, {"error": {"code": 503, "message": "caído"}}),
+        }
+        for label, error in cases.items():
+            with self.subTest(label=label):
+                result, calls, sleep = self._transcribe([error])
+
+                self.assertIsNotNone(result.error)
+                self.assertEqual(calls, 1)
+                sleep.assert_not_called()
 
 
 class SdkWireTests(unittest.TestCase):

@@ -65,9 +65,9 @@ El proveedor activo es `gemini`. Se elige con `--model`:
 
 | Modelo | Uso | `--prompt` | Máximo por petición |
 | --- | --- | --- | --- |
-| `gemini-3.5-transcribe` (por defecto) | Voz a texto dedicado: detecta el idioma y transcribe literalmente. | No | 1 hora |
-| `gemini-3.8-flash` | Modelo general más capaz; admite instrucciones en el prompt. | Sí | 2 horas |
-| `gemini-3.5-flash-lite` | Modelo general económico; admite instrucciones en el prompt. | Sí | 2 horas |
+| `gemini-3.5-transcribe` (por defecto) | Voz a texto dedicado: detecta el idioma y transcribe literalmente. | No | 30 min |
+| `gemini-3.8-flash` | Modelo general más capaz; admite instrucciones en el prompt. | Sí | 30 min |
+| `gemini-3.5-flash-lite` | Modelo general económico; admite instrucciones en el prompt. | Sí | 30 min |
 
 Combinar `--prompt` con `gemini-3.5-transcribe` es un error: ese modelo solo recibe audio. Los
 audios que superan el máximo por petición no se rechazan: se dividen en tramos (ver más abajo).
@@ -91,13 +91,18 @@ audios que superan el máximo por petición no se rechazan: se dividen en tramos
 - **Tamaño.** Hasta 2 GB por archivo (límite de la Files API). Un archivo que lo supere se
   convierte antes de enviarlo, así que con FFmpeg en la práctica no hay límite por tamaño; sin
   FFmpeg se rechaza.
-- **Duración.** Si un audio supera el máximo por petición del modelo, se divide en tramos de
-  hasta el 90 % de ese máximo, cortando en las pausas del habla para no partir palabras. Los
-  tramos se transcriben en orden y sus textos se unen en un único `.txt`. Si falla cualquiera,
-  el archivo completo se marca como fallido y se puede reintentar.
+- **Duración.** Los modelos admiten audios de más de una hora, pero por encima de ~30 minutos la
+  calidad cae (el modelo dedicado añade texto repetido al final y los `flash` se saltan partes).
+  Por eso, si un audio supera los 30 minutos, se divide en tramos de hasta 27 minutos, cortando
+  en las pausas del habla para no partir palabras. Los tramos se transcriben en orden y sus
+  textos se unen en un único `.txt`. Si falla cualquiera, el archivo completo se marca como
+  fallido y se puede reintentar.
 - Con FFmpeg, los audios de menos de 1 segundo se descartan.
-- Cada petición HTTP tiene un timeout de 15 minutos, y los errores transitorios (códigos 408,
-  429, 500, 502, 503 y 504) se reintentan hasta 3 intentos en total, con espera creciente.
+- Cada petición HTTP tiene un timeout de 15 minutos, y los errores transitorios del servidor
+  (códigos 408, 500, 502, 503 y 504) se reintentan hasta 5 intentos en total, con espera creciente
+  (5, 10, 20 y 40 s). Además, si la API responde con un límite de tasa por minuto (429), el
+  programa espera el tiempo que ella indica (hasta 2 minutos) y reintenta hasta 3 veces; así los
+  tramos de un audio largo, que se envían seguidos, no fallan por ese límite.
 
 ## Salidas
 
