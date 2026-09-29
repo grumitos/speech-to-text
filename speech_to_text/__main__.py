@@ -21,7 +21,7 @@ from .config import (
 )
 from .providers import get_provider
 from .transcriber import Transcriber
-from .ui import console, style_error, style_keyword, STYLE_INFO, STYLE_ERROR, STYLE_DEFAULT, STYLE_SUCCESS
+from .ui import console, style_error, style_provider, STYLE_INFO, STYLE_ERROR, STYLE_DEFAULT, STYLE_SUCCESS
 
 
 def make_output_safe() -> None:
@@ -80,15 +80,15 @@ def main() -> int:
 
     model_list = ", ".join(AVAILABLE_GEMINI_MODELS)
     console.print(
-        f"| Proveedor: {style_keyword('gemini')} | Modelos: {model_list}",
+        f"| Proveedor: {style_provider('gemini')} | Modelos: {model_list}",
         style=STYLE_DEFAULT,
     )
 
     try:
         provider = get_provider(model=args.model)
         provider.initialize()
-        console.print(f"| Proveedor inicializado: {style_keyword(provider.name)}", style=STYLE_SUCCESS)
-        console.print(f"| Modelo activo: {style_keyword(provider.current_model())}", style=STYLE_DEFAULT)
+        console.print(f"| Proveedor inicializado: {style_provider(provider.name)}", style=STYLE_SUCCESS)
+        console.print(f"| Modelo activo: {style_provider(provider.current_model(), provider.name)}", style=STYLE_DEFAULT)
     except ValueError as e:
         console.print(f"\n| {style_error('Error:')} {e}\n", style=STYLE_ERROR)
         return 1

@@ -24,11 +24,12 @@ from .ui import (
     print_kv,
     print_section,
     print_state,
+    provider_style,
+    style_provider,
     write_transcription_file,
     STYLE_DEFAULT,
     STYLE_SUCCESS,
     STYLE_ERROR,
-    STYLE_INFO,
     STYLE_WARNING,
 )
 
@@ -121,7 +122,7 @@ class Transcriber:
 
     def _print_start(self, prompt: str) -> None:
         print_section("Procesamiento")
-        print_kv("Proveedor", self.provider.name, STYLE_INFO)
+        print_kv("Proveedor", self.provider.name, provider_style(self.provider.name))
         if prompt:
             print_kv("Prompt", prompt, STYLE_DEFAULT)
         print_kv("Entrada", self.input_dir)
@@ -243,12 +244,12 @@ class Transcriber:
         prompt: str,
     ) -> Tuple[int, int]:
         print_section(f"Fase 3 / Transcripción ({len(valid_files)} archivos)")
-        print_kv("Proveedor", self.provider.name, STYLE_INFO)
+        print_kv("Proveedor", self.provider.name, provider_style(self.provider.name))
 
         success_count = 0
         error_count = 0
 
-        with make_progress(f"Transcribiendo con {self.provider.name}...") as progress:
+        with make_progress(f"Transcribiendo con {style_provider(self.provider.name)}...") as progress:
             task = progress.add_task("", total=len(valid_files))
 
             for file in valid_files:

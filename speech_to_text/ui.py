@@ -86,6 +86,11 @@ STYLE_INFO = UI_TOKENS["focus"]
 STYLE_MUTED = UI_TOKENS["muted"]
 STYLE_DISABLED = f"dim {UI_TOKENS['muted']}"
 
+# Color distintivo de cada proveedor: su nombre y el de sus modelos se muestran siempre así.
+PROVIDER_STYLES = {
+    "gemini": "bold #4796e3",  # azul de la marca Gemini
+}
+
 STATE_LABELS = {
     "info": "INFO",
     "success": "OK",
@@ -124,6 +129,15 @@ def style_text(text: object, style: str) -> str:
 
 def style_keyword(text: str) -> str:
     return style_text(text, STYLE_KEYWORD)
+
+
+def provider_style(provider: str) -> str:
+    return PROVIDER_STYLES.get(provider, STYLE_KEYWORD)
+
+
+def style_provider(text: str, provider: str = "") -> str:
+    """Colorea el nombre de un proveedor, o el de uno de sus modelos si se indica `provider`."""
+    return style_text(text, provider_style(provider or text))
 
 
 def style_error(text: str) -> str:

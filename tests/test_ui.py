@@ -5,7 +5,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from speech_to_text.models import TranscriptionResult
-from speech_to_text.ui import write_transcription_file
+from speech_to_text.ui import STYLE_KEYWORD, style_provider, write_transcription_file
 
 
 class UiTests(unittest.TestCase):
@@ -106,6 +106,15 @@ class UiTests(unittest.TestCase):
             self._write(Path(temp_dir), text="convertido")
 
             self.assertEqual([p.name for p in msg_dir.iterdir()], ["nota.m4a.txt"])
+
+
+class ProviderStyleTests(unittest.TestCase):
+    def test_gemini_and_its_models_use_the_gemini_blue(self) -> None:
+        self.assertEqual(style_provider("gemini"), "[bold #4796e3]gemini[/]")
+        self.assertEqual(style_provider("gemini-3.8-flash", "gemini"), "[bold #4796e3]gemini-3.8-flash[/]")
+
+    def test_an_unknown_provider_falls_back_to_the_keyword_style(self) -> None:
+        self.assertEqual(style_provider("otro"), f"[{STYLE_KEYWORD}]otro[/]")
 
 
 if __name__ == "__main__":
