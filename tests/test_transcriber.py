@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 from audio import AudioValidation
+from config import TEMP_SUFFIX
 from models import TranscriptionResult
 from providers import TranscriptionProvider
 from transcriber import Transcriber
@@ -206,6 +207,142 @@ class TranscriberTests(unittest.TestCase):
         self.assertEqual(len(written_results), 1)
         self.assertIsNone(written_results[0].error)
         self.assertIn("permiso denegado", written_results[0].postprocess_warning or "")
+
+    def test_stale_partial_conversions_are_removed_without_touching_user_files(self) -> None:
+        provider = FakeProvider()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            input_dir = base / "in"
+            output_dir = base / "out"
+            input_dir.mkdir()
+            output_dir.mkdir()
+            stale_partial = input_dir / f"clip.wav.mp3{TEMP_SUFFIX}"
+            user_audio = input_dir / "notes_temp.mp3"
+            stale_partial.write_bytes(b"partial")
+            user_audio.write_bytes(b"user audio " * 100)
+
+            def run_test() -> None:
+                Transcriber(
+                    provider=provider,
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    ffmpeg_checker=lambda: False,
+                    result_writer=lambda *_: None,
+                ).process_files()
+
+            self._run_quietly(run_test)
+
+            self.assertFalse(stale_partial.exists())
+            self.assertTrue((output_dir / "audio" / "notes_temp.mp3").exists())
+
+        self.assertEqual(provider.transcribed_files, ["notes_temp.mp3"])
+
+    def test_never_overwrites_an_already_archived_audio(self) -> None:
+        provider = FakeProvider()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            input_dir = base / "in"
+            output_dir = base / "out"
+            (output_dir / "audio").mkdir(parents=True)
+            input_dir.mkdir()
+            (output_dir / "audio" / "voice.mp3").write_bytes(b"grabacion vieja")
+            (input_dir / "voice.mp3").write_bytes(b"grabacion nueva")
+
+            def run_test() -> None:
+                Transcriber(
+                    provider=provider,
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    ffmpeg_checker=lambda: False,
+                    audio_validator=lambda *_: AudioValidation(
+                        is_valid=True,
+                        error_message=None,
+                        needs_conversion=False,
+                    ),
+                    result_writer=lambda *_: None,
+                ).process_files()
+
+            self._run_quietly(run_test)
+
+            self.assertEqual((output_dir / "audio" / "voice.mp3").read_bytes(), b"grabacion vieja")
+            self.assertEqual((output_dir / "audio" / "voice.1.mp3").read_bytes(), b"grabacion nueva")
+            self.assertFalse((input_dir / "voice.mp3").exists())
+
+    def test_passes_provider_duration_limit_to_the_validator(self) -> None:
+        received: List[tuple] = []
+
+        class LimitedProvider(FakeProvider):
+            def max_duration_sec(self):
+                return 600.0
+
+        def audio_validator(*args) -> AudioValidation:
+            received.append(args)
+            return AudioValidation(is_valid=True, error_message=None, needs_conversion=False)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            input_dir = base / "in"
+            output_dir = base / "out"
+            input_dir.mkdir()
+            output_dir.mkdir()
+            (input_dir / "voice.mp3").write_bytes(b"audio")
+
+            def run_test() -> None:
+                Transcriber(
+                    provider=LimitedProvider(),
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    ffmpeg_checker=lambda: True,
+                    audio_validator=audio_validator,
+                    result_writer=lambda *_: None,
+                ).process_files()
+
+            self._run_quietly(run_test)
+
+        self.assertEqual(received[0][1:], (10.0, True, 600.0))
+
+    def test_process_files_returns_the_number_of_failed_files(self) -> None:
+        class FailingProvider(FakeProvider):
+            def transcribe(self, audio_path, original_filename, prompt=""):
+                return TranscriptionResult(
+                    file_name=original_filename,
+                    date="2026-01-01 00:00:00",
+                    transcription_text="",
+                    model_name=self.current_model(),
+                    provider_name=self.name,
+                    error="Error: 503",
+                )
+
+        def process(provider: FakeProvider, invalid: bool = False) -> int:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                base = Path(temp_dir)
+                input_dir = base / "in"
+                output_dir = base / "out"
+                input_dir.mkdir()
+                output_dir.mkdir()
+                (input_dir / "voice.mp3").write_bytes(b"audio")
+                validation = AudioValidation(
+                    is_valid=not invalid,
+                    error_message="demasiado corto" if invalid else None,
+                    needs_conversion=False,
+                )
+                transcriber = self._run_quietly(
+                    lambda: Transcriber(
+                        provider=provider,
+                        input_dir=input_dir,
+                        output_dir=output_dir,
+                        ffmpeg_checker=lambda: False,
+                        audio_validator=lambda *_: validation,
+                        result_writer=lambda *_: None,
+                    )
+                )
+                return self._run_quietly(transcriber.process_files)
+
+        self.assertEqual(process(FakeProvider()), 0)
+        self.assertEqual(process(FailingProvider()), 1)
+        self.assertEqual(process(FakeProvider(), invalid=True), 1)
 
 
 if __name__ == "__main__":

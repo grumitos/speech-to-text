@@ -6,8 +6,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from audio import AudioValidation, check_ffmpeg, validate_audio, convert_audio, is_audio_file
+from audio import (
+    AudioValidation,
+    check_ffmpeg,
+    cleanup_temp_files,
+    convert_audio,
+    is_audio_file,
+    validate_audio,
+)
 from config import MAX_CONVERSION_WORKERS, TARGET_FORMAT
+from fileutils import unique_path
 from models import TranscriptionResult
 from providers import TranscriptionProvider
 from ui import (
@@ -17,7 +25,6 @@ from ui import (
     print_section,
     print_state,
     write_transcription_file,
-    style_keyword,
     STYLE_DEFAULT,
     STYLE_SUCCESS,
     STYLE_ERROR,
@@ -33,7 +40,7 @@ class PreparedFile:
     error_message: Optional[str] = None
 
 
-ValidationFn = Callable[[Path, float, bool], AudioValidation]
+ValidationFn = Callable[[Path, float, bool, Optional[float]], AudioValidation]
 ConversionFn = Callable[[Path], Tuple[Optional[Path], Optional[str]]]
 ResultWriterFn = Callable[[TranscriptionResult, Path], None]
 MoveFileFn = Callable[[str, str], str]
@@ -68,21 +75,22 @@ class Transcriber:
         else:
             print_state("disabled", "FFmpeg no encontrado. La conversión de formatos no funcionará.")
 
-    def process_files(self, prompt: str = "") -> None:
+    def process_files(self, prompt: str = "") -> int:
+        """Procesa el directorio de entrada y devuelve la cantidad de archivos con error."""
         self._print_start(prompt)
 
+        cleanup_temp_files(self.input_dir)
         all_files = self._collect_audio_files()
         if not all_files:
             print_state("empty", "No se encontraron archivos de audio en el directorio de entrada.")
-            return
+            return 0
 
-        self._cleanup_temp_files()
-        prepared_files, files_needing_conversion = self._validate_files(all_files)
+        prepared_files, files_needing_conversion, skipped_count = self._validate_files(all_files)
         prepared_files.extend(self._convert_files(files_needing_conversion))
 
         if not prepared_files:
             print_state("empty", "No hay archivos válidos para transcribir.")
-            return
+            return skipped_count
 
         conversion_errors = [f for f in prepared_files if f.error_message]
         for file in conversion_errors:
@@ -96,6 +104,7 @@ class Transcriber:
 
         error_count = len(conversion_errors) + transcription_error_count
         self._print_summary(success_count=success_count, error_count=error_count)
+        return error_count + skipped_count
 
     def _print_start(self, prompt: str) -> None:
         print_section("Procesamiento")
@@ -108,25 +117,19 @@ class Transcriber:
     def _collect_audio_files(self) -> List[Path]:
         return sorted((f for f in self.input_dir.iterdir() if is_audio_file(f)), key=lambda p: p.name.lower())
 
-    def _cleanup_temp_files(self) -> None:
-        for file_path in self.input_dir.glob(f"*_temp{TARGET_FORMAT}"):
-            try:
-                file_path.unlink()
-            except OSError:
-                pass
-
-    def _validate_files(self, all_files: List[Path]) -> Tuple[List[PreparedFile], List[Path]]:
+    def _validate_files(self, all_files: List[Path]) -> Tuple[List[PreparedFile], List[Path], int]:
         print_section(f"Fase 1 / Validación ({len(all_files)} archivos)")
         prepared_files: List[PreparedFile] = []
         files_needing_conversion: List[Path] = []
         invalid_messages: List[str] = []
         warning_messages: List[str] = []
         max_size = self.provider.max_file_size_mb()
+        max_duration = self.provider.max_duration_sec()
 
         with make_progress("Validando...") as progress:
             task = progress.add_task("", total=len(all_files))
             for file_path in all_files:
-                validation = self.audio_validator(file_path, max_size, self.ffmpeg_available)
+                validation = self.audio_validator(file_path, max_size, self.ffmpeg_available, max_duration)
 
                 if validation.warning_message:
                     warning_messages.append(validation.warning_message)
@@ -150,7 +153,7 @@ class Transcriber:
             for msg in invalid_messages:
                 print_bullet(msg, STYLE_ERROR)
 
-        return prepared_files, files_needing_conversion
+        return prepared_files, files_needing_conversion, len(invalid_messages)
 
     def _convert_files(self, files_needing_conversion: List[Path]) -> List[PreparedFile]:
         if not files_needing_conversion:
@@ -184,10 +187,10 @@ class Transcriber:
                                 transcribe_path=conv_path,
                             )
                         )
+                        converted_count += 1
                         try:
                             original.unlink()
-                            converted_count += 1
-                        except Exception as e:
+                        except OSError as e:
                             print_state("error", f"Error al eliminar {original.name}: {e}")
                     else:
                         converted_files.append(
@@ -234,9 +237,6 @@ class Transcriber:
             task = progress.add_task("", total=len(valid_files))
 
             for file in valid_files:
-                if file.transcribe_path is None:
-                    continue
-
                 result = self.provider.transcribe(
                     audio_path=file.transcribe_path,
                     original_filename=file.original_path.name,
@@ -260,12 +260,12 @@ class Transcriber:
 
         return success_count, error_count
 
-    def _move_processed_audio(self, origin: Path | None) -> Optional[str]:
-        if origin is None:
-            return "ruta de audio no disponible"
+    def _move_processed_audio(self, origin: Path) -> Optional[str]:
         try:
-            destination = self.output_dir / "audio" / origin.name
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            archive_dir = self.output_dir / "audio"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            # shutil.move sobrescribe en silencio: no debe pisar un audio ya archivado.
+            destination = unique_path(archive_dir / origin.name)
             self.file_mover(str(origin), str(destination))
             return None
         except Exception as e:

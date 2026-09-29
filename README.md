@@ -1,98 +1,130 @@
 # SpeechToText
 
-CLI local para transcribir archivos de audio con Google Gemini.
+CLI local en Python para transcribir audio por lotes con Google Gemini y FFmpeg.
+
+Toma los archivos de un directorio de entrada, valida formato, tamaño y duración, convierte a
+MP3 cuando hace falta, envía el audio a Gemini y guarda cada transcripción como un archivo
+`.txt` en el directorio de salida.
 
 ## Estado del proyecto
 
-**En desarrollo activo.** El flujo por lotes, la conversion de audio y la suite de pruebas son funcionales. La integracion de IA es intencionalmente acotada a Gemini y utiliza un modelo preview configurable, por lo que puede requerir ajustes cuando cambie la disponibilidad del proveedor.
+Proyecto terminado y archivado: no recibe mantenimiento. Google retira modelos con frecuencia
+(el que usaba la primera versión dejó de existir en mayo de 2026). Si algún modelo deja de
+funcionar, revisa la [lista oficial](https://ai.google.dev/gemini-api/docs/models) y actualiza
+`GEMINI_MODELS` en `config.py`. Los modelos incluidos son los vigentes en septiembre de 2026.
 
-El flujo actual toma archivos desde un directorio de entrada, valida formato/tamano,
-convierte a MP3 cuando hace falta, envia el audio al modelo Gemini configurado y guarda
-las transcripciones como archivos `.txt` en el directorio de salida.
+## Privacidad
 
-Los audios y transcripciones permanecen en directorios locales ignorados por Git. El audio se envia a Google Gemini unicamente para ejecutar la transcripcion solicitada.
+Los audios y las transcripciones permanecen en carpetas locales ignoradas por Git. El audio se
+envía a Google Gemini únicamente para ejecutar la transcripción solicitada. Con el modelo por
+defecto se sube a la Files API de Google y se borra en cuanto termina la transcripción (si el
+borrado fallara, Google lo elimina por su cuenta a las 48 horas).
 
 ## Requisitos
 
-- Python 3.10 o superior.
-- Una clave `GOOGLE_API_KEY` en `.env`.
-- FFmpeg instalado y disponible en `PATH` para convertir formatos que no sean MP3.
-  Si no esta disponible, los MP3 pueden procesarse, pero se omite la validacion de duracion.
+- Windows con Python 3.10 o superior en el `PATH` (el código no depende del sistema operativo,
+  pero los lanzadores incluidos son para Windows).
+- Una clave de API de Gemini: [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+- [FFmpeg](https://ffmpeg.org/) en el `PATH` para convertir formatos que no sean MP3 y para
+  validar la duración. Sin FFmpeg solo se procesan MP3 y no se comprueban los límites de duración.
 
-## Configuracion
+## Instalación y uso
+
+Ejecuta `run.bat` (con doble clic o desde una terminal). La primera vez crea el entorno virtual
+`venv`, instala las dependencias de `requirements.in` y crea `.env` a partir de `.env.example`.
+Abre `.env` y reemplaza `tu_clave_aqui` por tu `GOOGLE_API_KEY`; luego copia los audios en
+`entrada` y vuelve a ejecutar `run.bat`.
+
+Instalación manual, si prefieres no usar el lanzador:
 
 ```bat
 python -m venv venv
 venv\Scripts\activate
 python -m pip install -r requirements.in
 copy .env.example .env
-```
-
-Despues edita `.env` y reemplaza `GOOGLE_API_KEY=tu_clave_aqui` por una clave valida.
-No subas `.env` al repo; esta ignorado por Git.
-
-## Uso
-
-Por defecto, el programa lee audio desde `entrada` y escribe resultados en `salida`.
-Ambos directorios se crean automaticamente si no existen y estan ignorados por Git.
-
-```bat
 python main.py
 ```
 
-Tambien puedes usar el wrapper de Windows:
+`run.bat` acepta las mismas opciones que `main.py`:
 
 ```bat
-run.bat
+run.bat --input entrada --output salida
+run.bat --model gemini-3.8-flash --prompt "Transcribe con puntuación clara"
 ```
 
-Opciones disponibles:
+Por defecto lee de `entrada` y escribe en `salida`, relativos al directorio desde el que se
+ejecuta (`run.bat` siempre trabaja desde la carpeta del proyecto). Ambas se crean solas y están
+ignoradas por Git. El programa termina con código de salida 1 si algún archivo falla o se omite
+por no ser válido, y con 0 si todo salió bien.
 
-```bat
-python main.py --input entrada --output salida --prompt "Transcribe con puntuacion clara"
-python main.py --model gemini-3.1-flash-lite-preview
-```
+## Modelos
 
-## Modelo y formatos
+El proveedor activo es `gemini`. Se elige con `--model`:
 
-El proveedor activo es `gemini` y el unico modelo soportado por la configuracion actual es
-`gemini-3.1-flash-lite-preview`.
+| Modelo | Uso | `--prompt` | Límites por archivo |
+| --- | --- | --- | --- |
+| `gemini-3.5-transcribe` (por defecto) | Voz a texto dedicado: detecta el idioma y transcribe literalmente. El audio se sube por la Files API. | No | 1 hora; 2 GB (límite de la Files API) |
+| `gemini-3.8-flash` | Modelo general más capaz; admite instrucciones en el prompt. Audio en línea. | Sí | 20 MB |
+| `gemini-3.5-flash-lite` | Modelo general económico; admite instrucciones en el prompt. Audio en línea. | Sí | 20 MB |
 
-Formatos de audio aceptados:
+Combinar `--prompt` con `gemini-3.5-transcribe` es un error: ese modelo solo recibe audio.
+
+## Formatos y límites
+
+Formatos aceptados:
 
 ```text
 .mp3, .mp4, .m4a, .wav, .flac, .ogg, .aac, .wma, .opus, .webm,
 .aiff, .mpeg, .mpga
 ```
 
-Los archivos que no sean MP3 requieren FFmpeg y se convierten a `.mp3` antes de
-transcribirse. Cuando una conversion termina correctamente, el audio original se elimina.
-Tras una transcripcion exitosa, el audio usado para transcribir se mueve a `salida/audio`.
+- Todo lo que no sea MP3 requiere FFmpeg y se convierte a `.mp3` (128 kbps) antes de
+  transcribirse. **Cuando la conversión termina bien, el audio original se elimina.**
+- Los límites de tamaño y duración se validan antes de convertir, sobre el archivo original. Un
+  WAV grande puede superar el límite de 20 MB de los modelos `flash` aunque su MP3 cupiera;
+  con el modelo por defecto (2 GB) rara vez importa.
+- Con FFmpeg, los audios de menos de 1 segundo se descartan.
+- Cada petición HTTP tiene un timeout de 15 minutos, y los errores transitorios (códigos 408,
+  429, 500, 502, 503 y 504) se reintentan hasta 3 intentos en total, con espera creciente.
 
 ## Salidas
 
-- Transcripciones: `salida/msg/<nombre-original>.<extension>.txt`
-- Audios procesados: `salida/audio/`
-- Errores de validacion: se muestran en consola.
-- Errores de conversion o transcripcion: se registran en el `.txt` correspondiente.
+- Transcripciones: `salida/msg/<nombre-original>.<extensión>.txt`
+- Audios procesados: `salida/audio/`, con la extensión original más `.mp3` si hubo conversión
+  (`clip.wav` queda como `clip.wav.mp3`).
+- Errores de validación: se muestran en consola.
+- Errores de conversión o transcripción: se registran en el `.txt` correspondiente y el audio
+  se queda en `entrada` para poder reintentarlo.
 
-El nombre de salida conserva la extension original del archivo de entrada para evitar
-colisiones como `clip.wav` y `clip.mp3`.
+El nombre conserva la extensión original para evitar colisiones entre `clip.wav` y `clip.mp3`.
+Si repites un nombre que ya se procesó, nada se sobrescribe: el audio nuevo se archiva como
+`nombre.1.mp3` y la transcripción como `nombre.<extensión>.1.txt`. La única excepción es el
+informe de error de un intento anterior, que un reintento sí reemplaza.
 
 ## Pruebas
 
-Las pruebas usan `unittest` y no requieren llamar a Gemini.
+Las pruebas usan `unittest` y no llaman a Gemini (usan clientes simulados, incluido el SDK real
+sobre un transporte HTTP falso).
 
 ```bat
 python -m unittest discover -s tests
 ```
 
-## Estructura principal
+## Estructura
 
 - `main.py`: CLI, carga `.env`, inicializa el proveedor y lanza el procesamiento.
-- `config.py`: modelo activo, limites, extensiones aceptadas y rutas por defecto.
-- `providers.py`: proveedor Gemini y llamada a `google-genai`.
-- `audio.py`: validacion, deteccion de FFmpeg y conversion a MP3.
-- `transcriber.py`: orquestacion de validacion, conversion, transcripcion y movimiento de archivos.
-- `ui.py`: salida por consola y escritura de archivos de transcripcion.
-- `tests/`: cobertura de validacion, proveedor, flujo de transcripcion y escritura de salidas.
+- `config.py`: catálogo de modelos y sus capacidades, límites, extensiones aceptadas y rutas por
+  defecto.
+- `providers.py`: proveedor Gemini y llamadas a `google-genai`.
+- `audio.py`: validación, detección de FFmpeg y conversión a MP3 (los parciales usan el sufijo
+  `.stt-tmp`).
+- `transcriber.py`: orquesta validación, conversión, transcripción y archivado de audios.
+- `fileutils.py`: nombres de archivo únicos para no sobrescribir salidas.
+- `ui.py`: salida por consola y escritura de las transcripciones.
+- `models.py`: resultado de una transcripción.
+- `run.bat`: lanzador para Windows que prepara el entorno la primera vez.
+- `tests/`: pruebas de validación, conversión, proveedor, flujo completo y salidas.
+
+## Licencia
+
+[MIT](LICENSE).

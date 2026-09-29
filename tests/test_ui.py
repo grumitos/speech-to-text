@@ -34,6 +34,79 @@ class UiTests(unittest.TestCase):
             self.assertTrue((output_dir / "msg" / "clip.wav.txt").exists())
             self.assertTrue((output_dir / "msg" / "clip.mp3.txt").exists())
 
+    def test_write_transcription_file_preserves_line_breaks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            result = TranscriptionResult(
+                file_name="talk.mp3",
+                date="2026-01-01 00:00:00",
+                transcription_text="primer párrafo\n\nsegundo párrafo",
+                model_name="fake-model",
+                provider_name="fake",
+            )
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                write_transcription_file(result, output_dir)
+
+            content = (output_dir / "msg" / "talk.mp3.txt").read_text(encoding="utf-8")
+            self.assertIn("primer párrafo\n\nsegundo párrafo\n", content)
+
+    def test_write_transcription_file_wraps_long_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            result = TranscriptionResult(
+                file_name="long.mp3",
+                date="2026-01-01 00:00:00",
+                transcription_text="palabra " * 40,
+                model_name="fake-model",
+                provider_name="fake",
+            )
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                write_transcription_file(result, output_dir)
+
+            content = (output_dir / "msg" / "long.mp3.txt").read_text(encoding="utf-8")
+            body = content.split("-" * 85 + "\n")[1]
+            self.assertTrue(all(len(line) <= 80 for line in body.splitlines()))
+
+    def _write(self, output_dir: Path, **fields) -> Path:
+        result = TranscriptionResult(
+            file_name="nota.m4a",
+            date="2026-01-01 00:00:00",
+            transcription_text=fields.pop("text", ""),
+            model_name="fake-model",
+            provider_name="fake",
+            **fields,
+        )
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            write_transcription_file(result, output_dir)
+        return output_dir / "msg"
+
+    def test_never_overwrites_an_existing_transcription(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            msg_dir = self._write(Path(temp_dir), text="primera grabación")
+            self._write(Path(temp_dir), text="segunda grabación")
+
+            self.assertIn("primera grabación", (msg_dir / "nota.m4a.txt").read_text(encoding="utf-8"))
+            self.assertIn("segunda grabación", (msg_dir / "nota.m4a.1.txt").read_text(encoding="utf-8"))
+
+    def test_a_retry_replaces_the_previous_error_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            msg_dir = self._write(Path(temp_dir), error="Error: 503")
+            self._write(Path(temp_dir), text="ahora sí")
+
+            self.assertEqual([p.name for p in msg_dir.iterdir()], ["nota.m4a.txt"])
+            content = (msg_dir / "nota.m4a.txt").read_text(encoding="utf-8")
+            self.assertIn("ahora sí", content)
+            self.assertNotIn("ERROR DE", content)
+
+    def test_conversion_errors_are_replaced_on_retry_too(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            msg_dir = self._write(Path(temp_dir), conversion_error="FFmpeg falló")
+            self._write(Path(temp_dir), text="convertido")
+
+            self.assertEqual([p.name for p in msg_dir.iterdir()], ["nota.m4a.txt"])
+
 
 if __name__ == "__main__":
     unittest.main()

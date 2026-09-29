@@ -1,3 +1,7 @@
+import argparse
+import os
+import sys
+import traceback
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -7,18 +11,23 @@ from config import (
     DEFAULT_GEMINI_MODEL,
     DEFAULT_INPUT_DIR,
     DEFAULT_OUTPUT_DIR,
+    GEMINI_MODELS,
 )
 from providers import get_provider
 from transcriber import Transcriber
 from ui import console, style_error, style_keyword, STYLE_INFO, STYLE_ERROR, STYLE_DEFAULT, STYLE_SUCCESS
 
 
-def main() -> int:
-    import warnings
-    import argparse
+def make_output_safe() -> None:
+    """Evita que un carácter no representable (p. ej. un nombre de archivo en japonés con la
+    salida redirigida a cp1252) lance UnicodeEncodeError y aborte todo el lote."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
 
-    warnings.filterwarnings("ignore", category=UserWarning, module=".*")
-    load_dotenv()
+
+def build_parser() -> argparse.ArgumentParser:
+    prompt_models = ", ".join(m.id for m in GEMINI_MODELS.values() if m.accepts_prompt)
 
     parser = argparse.ArgumentParser(
         description="Transcribe archivos de audio usando Google Gemini"
@@ -32,7 +41,7 @@ def main() -> int:
     parser.add_argument(
         "--prompt",
         default="",
-        help="Prompt para mejorar la transcripción",
+        help=f"Prompt para mejorar la transcripción (solo con: {prompt_models})",
     )
     parser.add_argument(
         "--input",
@@ -44,7 +53,21 @@ def main() -> int:
         default=str(DEFAULT_OUTPUT_DIR),
         help=f"Directorio de salida (default: {DEFAULT_OUTPUT_DIR})",
     )
+    return parser
+
+
+def main() -> int:
+    make_output_safe()
+    load_dotenv()
+
+    parser = build_parser()
     args = parser.parse_args()
+
+    if args.prompt and not GEMINI_MODELS[args.model].accepts_prompt:
+        parser.error(
+            f"{args.model} es un modelo de transcripción dedicado y no admite --prompt. "
+            f"Quita --prompt o elige otro modelo con --model."
+        )
 
     console.print("| Iniciando SpeechToText", style=STYLE_INFO)
 
@@ -73,10 +96,10 @@ def main() -> int:
         input_dir=input_dir,
         output_dir=output_dir,
     )
-    transcriber.process_files(prompt=args.prompt)
+    failed_count = transcriber.process_files(prompt=args.prompt)
 
     console.print("\n| Finalizado\n", style=STYLE_INFO)
-    return 0
+    return 1 if failed_count else 0
 
 
 if __name__ == "__main__":
@@ -87,8 +110,6 @@ if __name__ == "__main__":
         raise SystemExit(130)
     except Exception as e:
         console.print(f"\n| {style_error('Error crítico:')} {e}\n", style=STYLE_ERROR)
-        import os
         if os.getenv("SPEECH_TO_TEXT_DEBUG") == "1":
-            import traceback
             traceback.print_exc()
         raise SystemExit(1)
