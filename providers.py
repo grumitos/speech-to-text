@@ -11,11 +11,13 @@ from google.genai import types
 from config import (
     AVAILABLE_GEMINI_MODELS,
     DEFAULT_GEMINI_MODEL,
+    FILE_POLL_INTERVAL_SEC,
+    FILE_PROCESSING_TIMEOUT_SEC,
     GEMINI_MODELS,
     MAX_RETRIES,
+    NATIVE_AUDIO_MIME_TYPES,
     REQUEST_TIMEOUT_SEC,
     RETRY_BASE_DELAY,
-    TARGET_MIME_TYPE,
 )
 from models import TranscriptionResult
 
@@ -120,48 +122,64 @@ class GeminiProvider(TranscriptionProvider):
 
         start = time.monotonic()
         try:
-            if self.spec.dedicated_transcriber:
-                response = self._generate_with_uploaded_audio(audio_path)
-            else:
-                response = self._generate_with_inline_audio(audio_path, prompt or TRANSCRIPTION_PROMPT)
+            response = self._generate(audio_path, prompt or TRANSCRIPTION_PROMPT)
             result.transcription_text = self._extract_text(response)
         except Exception as e:  # un fallo en un archivo no debe detener el resto del lote
             result.error = f"Error: {e}"
         result.transcription_time = time.monotonic() - start
         return result
 
-    def _generate_with_inline_audio(self, audio_path: Path, prompt: str):
-        audio_part = types.Part.from_bytes(data=audio_path.read_bytes(), mime_type=TARGET_MIME_TYPE)
-        return self.client.models.generate_content(
-            model=self.model_name,
-            contents=[prompt, audio_part],
-            config=types.GenerateContentConfig(
-                automatic_function_calling=NO_AUTOMATIC_FUNCTION_CALLING,
-            ),
-        )
-
-    def _generate_with_uploaded_audio(self, audio_path: Path):
+    def _generate(self, audio_path: Path, prompt: str) -> types.GenerateContentResponse:
+        mime_type = self._mime_type_for(audio_path)
         # Se sube el descriptor y no la ruta: con una ruta el SDK manda el nombre del archivo en una
         # cabecera HTTP que solo admite ASCII, y fallaría con nombres como "reunión.mp3".
         with audio_path.open("rb") as audio_file:
             uploaded = self.client.files.upload(
                 file=audio_file,
-                config=types.UploadFileConfig(mime_type=TARGET_MIME_TYPE),
+                config=types.UploadFileConfig(mime_type=mime_type),
             )
         try:
-            # Sin language_codes el modelo detecta el idioma; VERBATIM conserva lo dicho tal cual.
-            return self.client.models.generate_content(
-                model=self.model_name,
-                contents=[uploaded],
-                config=types.GenerateContentConfig(
+            uploaded = self._wait_until_active(uploaded)
+            if self.spec.dedicated_transcriber:
+                # Sin language_codes el modelo detecta el idioma; VERBATIM conserva lo dicho tal cual.
+                contents = [uploaded]
+                config = types.GenerateContentConfig(
                     automatic_function_calling=NO_AUTOMATIC_FUNCTION_CALLING,
                     audio_transcription_config=types.AudioTranscriptionConfig(
                         mode=types.AudioTranscriptionConfigMode.VERBATIM,
                     ),
-                ),
+                )
+            else:
+                contents = [prompt, uploaded]
+                config = types.GenerateContentConfig(
+                    automatic_function_calling=NO_AUTOMATIC_FUNCTION_CALLING,
+                )
+            return self.client.models.generate_content(
+                model=self.model_name,
+                contents=contents,
+                config=config,
             )
         finally:
             self._delete_uploaded(uploaded)
+
+    @staticmethod
+    def _mime_type_for(audio_path: Path) -> str:
+        extension = audio_path.suffix.lower()
+        if extension not in NATIVE_AUDIO_MIME_TYPES:
+            raise ValueError(f"Formato de audio no soportado por Gemini: {extension or '(sin extensión)'}")
+        return NATIVE_AUDIO_MIME_TYPES[extension]
+
+    def _wait_until_active(self, uploaded: types.File) -> types.File:
+        """Los archivos grandes pueden quedar un rato en PROCESSING antes de poder usarse."""
+        deadline = time.monotonic() + FILE_PROCESSING_TIMEOUT_SEC
+        while uploaded.state == types.FileState.PROCESSING:
+            if time.monotonic() > deadline:
+                raise TimeoutError("El archivo subido no terminó de procesarse a tiempo.")
+            time.sleep(FILE_POLL_INTERVAL_SEC)
+            uploaded = self.client.files.get(name=uploaded.name)
+        if uploaded.state == types.FileState.FAILED:
+            raise ValueError("Gemini no pudo procesar el archivo subido.")
+        return uploaded
 
     def _delete_uploaded(self, uploaded: types.File) -> None:
         try:
@@ -171,13 +189,30 @@ class GeminiProvider(TranscriptionProvider):
 
     @staticmethod
     def _extract_text(response: types.GenerateContentResponse) -> str:
-        text = (response.text or "").strip()
+        """Junta el texto de la respuesta.
+
+        El modelo de transcripción dedicado no devuelve partes de texto sino de tipo
+        `audio_transcription`, así que `response.text` sale vacío con él.
+        """
+        candidate = response.candidates[0] if response.candidates else None
+        parts = (candidate.content.parts if candidate and candidate.content else None) or []
+        chunks = []
+        for part in parts:
+            if part.audio_transcription and part.audio_transcription.text:
+                chunks.append(part.audio_transcription.text)
+            elif part.text and not part.thought:
+                chunks.append(part.text)
+
+        finish_reason = candidate.finish_reason if candidate else None
+        if finish_reason == types.FinishReason.MAX_TOKENS:
+            raise ValueError("La transcripción se truncó por el límite de salida del modelo (MAX_TOKENS).")
+
+        text = "".join(chunks).strip()
         if text:
             return text
 
         reason = "sin detalle"
-        if response.candidates and response.candidates[0].finish_reason:
-            finish_reason = response.candidates[0].finish_reason
+        if finish_reason:
             reason = f"finish_reason={getattr(finish_reason, 'name', finish_reason)}"
         elif response.prompt_feedback and response.prompt_feedback.block_reason:
             block_reason = response.prompt_feedback.block_reason

@@ -1,18 +1,30 @@
+import json
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from config import (
-    MIN_AUDIO_DURATION_SEC,
-    FFMPEG_TIMEOUT_SEC,
-    TARGET_FORMAT,
-    TEMP_SUFFIX,
     AUDIO_EXTENSIONS,
+    FFMPEG_TIMEOUT_SEC,
+    FFPROBE_TIMEOUT_SEC,
+    MIN_AUDIO_DURATION_SEC,
+    NATIVE_AUDIO_MIME_TYPES,
+    PASSTHROUGH_CODECS,
+    SILENCE_MIN_DURATION_SEC,
+    SILENCE_THRESHOLD_DB,
+    TARGET_BITRATE,
+    TARGET_FORMAT,
+    TARGET_SAMPLE_RATE,
 )
-from fileutils import unique_path
+
+
+@dataclass(frozen=True)
+class AudioInfo:
+    codec: str
+    duration_sec: Optional[float]
 
 
 @dataclass(frozen=True)
@@ -20,32 +32,55 @@ class AudioValidation:
     is_valid: bool
     error_message: Optional[str]
     needs_conversion: bool
-    warning_message: Optional[str] = None
+    duration_sec: Optional[float] = None
+    # False cuando el archivo no contiene audio: se ignora sin contarlo como fallo.
+    is_audio: bool = True
 
 
 def check_ffmpeg() -> bool:
-    return shutil.which("ffmpeg") is not None
+    return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
 
-def get_duration(file_path: Path) -> Optional[float]:
+def is_candidate_file(path: Path, ffmpeg_available: bool) -> bool:
+    """Con FFmpeg cualquier archivo puede ser audio (se decide por su contenido)."""
+    if not path.is_file() or path.name.startswith("."):
+        return False
+    return ffmpeg_available or path.suffix.lower() in AUDIO_EXTENSIONS
+
+
+def probe_audio(file_path: Path) -> Optional[AudioInfo]:
+    """Devuelve el códec y la duración de la primera pista de audio, o None si no hay ninguna."""
+    command = [
+        "ffprobe", "-v", "error", "-select_streams", "a:0",
+        "-show_entries", "stream=codec_name,duration:format=duration",
+        "-of", "json", str(file_path),
+    ]
     try:
         result = subprocess.run(
-            ["ffmpeg", "-i", str(file_path), "-hide_banner"],
+            command,
             capture_output=True,
-            text=True,
-            timeout=FFMPEG_TIMEOUT_SEC,
+            encoding="utf-8",
+            errors="replace",
+            timeout=FFPROBE_TIMEOUT_SEC,
         )
-        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", result.stderr)
-        if match:
-            h, m, s = int(match.group(1)), int(match.group(2)), float(match.group(3))
-            return h * 3600 + m * 60 + s
-    except (subprocess.TimeoutExpired, OSError):
-        pass
-    return None
+        data = json.loads(result.stdout or "{}") if result.returncode == 0 else {}
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        return None
+
+    streams = data.get("streams") or []
+    if not streams:
+        return None
+    duration = _parse_duration(streams[0].get("duration"))
+    if duration is None:
+        duration = _parse_duration((data.get("format") or {}).get("duration"))
+    return AudioInfo(codec=streams[0].get("codec_name") or "", duration_sec=duration)
 
 
-def is_audio_file(path: Path) -> bool:
-    return path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
+def _parse_duration(value: object) -> Optional[float]:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):  # ausente o "N/A"
+        return None
 
 
 def validate_audio(
@@ -53,110 +88,165 @@ def validate_audio(
     max_size_mb: float,
     ffmpeg_available: bool,
     max_duration_sec: Optional[float] = None,
-    duration_fn: Callable[[Path], Optional[float]] = get_duration,
+    probe_fn: Callable[[Path], Optional[AudioInfo]] = probe_audio,
 ) -> AudioValidation:
-    needs_conversion = audio_path.suffix.lower() != TARGET_FORMAT
+    extension = audio_path.suffix.lower()
+    size_mb = audio_path.stat().st_size / (1024 * 1024)
 
-    if needs_conversion and not ffmpeg_available:
-        return AudioValidation(
-            is_valid=False,
-            error_message=f"Formato {audio_path.suffix} requiere conversión, pero FFmpeg no está disponible.",
-            needs_conversion=False,
-        )
-
-    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
-    if file_size_mb > max_size_mb * 1.1:
-        return AudioValidation(
-            is_valid=False,
-            error_message=f"Archivo demasiado grande ({file_size_mb:.2f} MB > ~{max_size_mb} MB)",
-            needs_conversion=needs_conversion,
-        )
-
-    warning_message = None
-    if file_size_mb > max_size_mb * 0.9:
-        warning_message = (
-            f"{audio_path.name} ({file_size_mb:.2f} MB) está cerca del límite de {max_size_mb} MB."
-        )
-
-    if ffmpeg_available:
-        duration = duration_fn(audio_path)
-        if duration is not None and duration < MIN_AUDIO_DURATION_SEC:
-            return AudioValidation(
-                is_valid=False,
-                error_message=f"Audio demasiado corto ({duration:.2f}s < {MIN_AUDIO_DURATION_SEC}s)",
-                needs_conversion=needs_conversion,
-            )
-        if duration is not None and max_duration_sec is not None and duration > max_duration_sec:
+    if not ffmpeg_available:
+        if extension not in NATIVE_AUDIO_MIME_TYPES:
             return AudioValidation(
                 is_valid=False,
                 error_message=(
-                    f"Audio demasiado largo ({duration / 60:.1f} min > {max_duration_sec / 60:.0f} min)"
+                    f"Formato {extension or '(sin extensión)'} requiere conversión, "
+                    "pero FFmpeg no está disponible."
                 ),
-                needs_conversion=needs_conversion,
+                needs_conversion=False,
             )
+        if size_mb > max_size_mb:
+            return AudioValidation(
+                is_valid=False,
+                error_message=f"Archivo demasiado grande ({size_mb:.2f} MB > {max_size_mb:g} MB)",
+                needs_conversion=False,
+            )
+        return AudioValidation(is_valid=True, error_message=None, needs_conversion=False)
 
+    info = probe_fn(audio_path)
+    if info is None:
+        return AudioValidation(
+            is_valid=False,
+            error_message="No contiene una pista de audio legible.",
+            needs_conversion=False,
+            is_audio=False,
+        )
+
+    duration = info.duration_sec
+    if duration is not None and duration < MIN_AUDIO_DURATION_SEC:
+        return AudioValidation(
+            is_valid=False,
+            error_message=f"Audio demasiado corto ({duration:.2f}s < {MIN_AUDIO_DURATION_SEC}s)",
+            needs_conversion=False,
+            duration_sec=duration,
+        )
+
+    is_passthrough = info.codec in PASSTHROUGH_CODECS.get(extension, set())
+    too_big = size_mb > max_size_mb
+    too_long = duration is not None and max_duration_sec is not None and duration > max_duration_sec
     return AudioValidation(
         is_valid=True,
         error_message=None,
-        needs_conversion=needs_conversion,
-        warning_message=warning_message,
+        needs_conversion=not is_passthrough or too_big or too_long,
+        duration_sec=duration,
     )
 
 
-def convert_audio(input_path: Path) -> Tuple[Optional[Path], Optional[str]]:
-    final_output = _converted_output_path(input_path)
-    temp_output = final_output.with_name(final_output.name + TEMP_SUFFIX)
+_SILENCE_START = re.compile(r"silence_start: (-?\d+(?:\.\d+)?)")
+_SILENCE_END = re.compile(r"silence_end: (-?\d+(?:\.\d+)?)")
+
+
+def _detect_silences(input_path: Path) -> List[Tuple[float, float]]:
+    """Intervalos de silencio (inicio, fin) de la primera pista de audio."""
+    command = [
+        "ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-i", str(input_path),
+        "-map", "0:a:0",
+        "-af", f"silencedetect=noise={SILENCE_THRESHOLD_DB}dB:d={SILENCE_MIN_DURATION_SEC}",
+        "-f", "null", "-",
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, encoding="utf-8", errors="replace", timeout=FFMPEG_TIMEOUT_SEC
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+
+    silences: List[Tuple[float, float]] = []
+    start: Optional[float] = None
+    for line in result.stderr.splitlines():
+        if (match := _SILENCE_START.search(line)) is not None:
+            start = float(match.group(1))
+        elif (match := _SILENCE_END.search(line)) is not None and start is not None:
+            silences.append((start, float(match.group(1))))
+            start = None
+    return silences
+
+
+def choose_cut_times(
+    silences: List[Tuple[float, float]], duration_sec: float, segment_sec: float
+) -> List[float]:
+    """Instantes de corte para tramos de como máximo `segment_sec`, en pausas del habla.
+
+    Cada corte es el silencio más tardío que cabe en el tramo (y no antes de su mitad); si no hay
+    ninguno se corta en el límite, aunque pueda partir una palabra.
+    """
+    pauses = [(start + end) / 2 for start, end in silences]
+    cuts: List[float] = []
+    position = 0.0
+    while duration_sec - position > segment_sec:
+        limit = position + segment_sec
+        candidates = [t for t in pauses if position + segment_sec / 2 <= t <= limit]
+        position = max(candidates) if candidates else limit
+        cuts.append(position)
+    return cuts
+
+
+def _segment_timing_args(input_path: Path, segment_sec: float) -> List[str]:
+    info = probe_audio(input_path)
+    if info is not None and info.duration_sec:
+        cuts = choose_cut_times(_detect_silences(input_path), info.duration_sec, segment_sec)
+        if cuts:
+            return ["-segment_times", ",".join(f"{t:.3f}" for t in cuts)]
+    return ["-segment_time", str(int(segment_sec))]
+
+
+def convert_audio(
+    input_path: Path,
+    output_dir: Path,
+    segment_sec: Optional[float] = None,
+) -> Tuple[List[Path], Optional[str]]:
+    """Convierte a MP3 mono de 16 kHz dentro de `output_dir`.
+
+    Con `segment_sec` divide el resultado en tramos de esa duración. Devuelve los archivos
+    generados en orden, o el motivo del fallo.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if segment_sec:
+        output = output_dir / f"part_%03d{TARGET_FORMAT}"
+        segment_args = ["-f", "segment", "-reset_timestamps", "1", *_segment_timing_args(input_path, segment_sec)]
+    else:
+        output = output_dir / f"part_000{TARGET_FORMAT}"
+        segment_args = []
 
     command = [
-        "ffmpeg", "-y", "-i", str(input_path), "-vn",
-        "-f", TARGET_FORMAT.lstrip("."),
-        "-c:a", "libmp3lame", "-b:a", "128k",
-        str(temp_output), "-hide_banner", "-loglevel", "error",
+        "ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(input_path),
+        "-map", "0:a:0",  # solo la primera pista de audio: descarta vídeo, subtítulos y datos
+        "-ac", "1", "-ar", str(TARGET_SAMPLE_RATE),
+        "-c:a", "libmp3lame", "-b:a", TARGET_BITRATE,
+        *segment_args,
+        str(output),
     ]
     try:
         subprocess.run(
             command,
             check=True,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=FFMPEG_TIMEOUT_SEC,
         )
-        if temp_output.exists():
-            temp_output.rename(final_output)
-        if not final_output.exists():
-            return None, "FFmpeg finalizó sin generar el archivo convertido."
-        return final_output, None
-
     except subprocess.TimeoutExpired:
-        _cleanup(temp_output)
-        return None, f"FFmpeg timeout ({FFMPEG_TIMEOUT_SEC}s)"
-
+        error = f"FFmpeg timeout ({FFMPEG_TIMEOUT_SEC}s)"
     except FileNotFoundError:
-        return None, "FFmpeg no encontrado."
-
+        error = "FFmpeg no encontrado."
     except subprocess.CalledProcessError as e:
-        _cleanup(temp_output)
-        stderr = (e.stderr or "").strip()
-        return None, f"FFmpeg falló: {stderr or e}"
-
+        error = f"FFmpeg falló: {(e.stderr or '').strip() or e}"
     except Exception as e:
-        _cleanup(temp_output)
-        return None, f"Error inesperado: {e}"
+        error = f"Error inesperado: {e}"
+    else:
+        parts = sorted(output_dir.glob(f"part_*{TARGET_FORMAT}"))
+        if parts:
+            return parts, None
+        error = "FFmpeg finalizó sin generar el archivo convertido."
 
-
-def cleanup_temp_files(directory: Path) -> None:
-    """Elimina los archivos parciales que dejó una conversión interrumpida."""
-    for path in directory.glob(f"*{TARGET_FORMAT}{TEMP_SUFFIX}"):
-        _cleanup(path)
-
-
-def _cleanup(path: Path) -> None:
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
-def _converted_output_path(input_path: Path) -> Path:
-    source_suffix = input_path.suffix.lower().lstrip(".") or "audio"
-    return unique_path(input_path.with_name(f"{input_path.stem}.{source_suffix}{TARGET_FORMAT}"))
+    shutil.rmtree(output_dir, ignore_errors=True)
+    return [], error
