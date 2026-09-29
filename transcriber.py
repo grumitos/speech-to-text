@@ -1,5 +1,6 @@
 import os
 import shutil
+import tempfile
 import concurrent.futures
 from dataclasses import dataclass
 from datetime import datetime
@@ -9,12 +10,11 @@ from typing import Callable, List, Optional, Tuple
 from audio import (
     AudioValidation,
     check_ffmpeg,
-    cleanup_temp_files,
     convert_audio,
-    is_audio_file,
+    is_candidate_file,
     validate_audio,
 )
-from config import MAX_CONVERSION_WORKERS, TARGET_FORMAT
+from config import MAX_CONVERSION_WORKERS, SEGMENT_DURATION_MARGIN
 from fileutils import unique_path
 from models import TranscriptionResult
 from providers import TranscriptionProvider
@@ -36,12 +36,19 @@ from ui import (
 @dataclass(frozen=True)
 class PreparedFile:
     original_path: Path
-    transcribe_path: Optional[Path]
+    # Lo que se envía a Gemini: el propio original o los tramos resultantes de convertirlo.
+    audio_paths: Tuple[Path, ...]
     error_message: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class PendingConversion:
+    path: Path
+    segment_sec: Optional[float]
+
+
 ValidationFn = Callable[[Path, float, bool, Optional[float]], AudioValidation]
-ConversionFn = Callable[[Path], Tuple[Optional[Path], Optional[str]]]
+ConversionFn = Callable[[Path, Path, Optional[float]], Tuple[List[Path], Optional[str]]]
 ResultWriterFn = Callable[[TranscriptionResult, Path], None]
 MoveFileFn = Callable[[str, str], str]
 NowFn = Callable[[], datetime]
@@ -73,34 +80,40 @@ class Transcriber:
         if self.ffmpeg_available:
             print_state("success", "FFmpeg disponible")
         else:
-            print_state("disabled", "FFmpeg no encontrado. La conversión de formatos no funcionará.")
+            print_state(
+                "disabled",
+                "FFmpeg no encontrado: solo se admiten formatos que Gemini acepta directamente, "
+                "sin conversión ni división de audios largos.",
+            )
 
     def process_files(self, prompt: str = "") -> int:
         """Procesa el directorio de entrada y devuelve la cantidad de archivos con error."""
         self._print_start(prompt)
 
-        cleanup_temp_files(self.input_dir)
-        all_files = self._collect_audio_files()
+        all_files = self._collect_files()
         if not all_files:
             print_state("empty", "No se encontraron archivos de audio en el directorio de entrada.")
             return 0
 
-        prepared_files, files_needing_conversion, skipped_count = self._validate_files(all_files)
-        prepared_files.extend(self._convert_files(files_needing_conversion))
+        # Las conversiones se hacen en un directorio temporal: los originales no se tocan y solo
+        # se archivan cuando su transcripción sale bien.
+        with tempfile.TemporaryDirectory(prefix="speech-to-text-") as work_dir:
+            prepared_files, pending, skipped_count = self._validate_files(all_files)
+            prepared_files.extend(self._convert_files(pending, Path(work_dir)))
 
-        if not prepared_files:
-            print_state("empty", "No hay archivos válidos para transcribir.")
-            return skipped_count
+            if not prepared_files:
+                print_state("empty", "No hay archivos válidos para transcribir.")
+                return skipped_count
 
-        conversion_errors = [f for f in prepared_files if f.error_message]
-        for file in conversion_errors:
-            self._write_conversion_error(file)
+            conversion_errors = [f for f in prepared_files if f.error_message]
+            for file in conversion_errors:
+                self._write_conversion_error(file)
 
-        valid_files = [f for f in prepared_files if f.transcribe_path is not None]
-        success_count, transcription_error_count = self._transcribe_files(
-            valid_files=valid_files,
-            prompt=prompt,
-        )
+            valid_files = [f for f in prepared_files if not f.error_message]
+            success_count, transcription_error_count = self._transcribe_files(
+                valid_files=valid_files,
+                prompt=prompt,
+            )
 
         error_count = len(conversion_errors) + transcription_error_count
         self._print_summary(success_count=success_count, error_count=error_count)
@@ -114,15 +127,18 @@ class Transcriber:
         print_kv("Entrada", self.input_dir)
         print_kv("Salida", self.output_dir)
 
-    def _collect_audio_files(self) -> List[Path]:
-        return sorted((f for f in self.input_dir.iterdir() if is_audio_file(f)), key=lambda p: p.name.lower())
+    def _collect_files(self) -> List[Path]:
+        candidates = (f for f in self.input_dir.iterdir() if is_candidate_file(f, self.ffmpeg_available))
+        return sorted(candidates, key=lambda p: p.name.lower())
 
-    def _validate_files(self, all_files: List[Path]) -> Tuple[List[PreparedFile], List[Path], int]:
+    def _validate_files(
+        self, all_files: List[Path]
+    ) -> Tuple[List[PreparedFile], List[PendingConversion], int]:
         print_section(f"Fase 1 / Validación ({len(all_files)} archivos)")
         prepared_files: List[PreparedFile] = []
-        files_needing_conversion: List[Path] = []
+        pending: List[PendingConversion] = []
         invalid_messages: List[str] = []
-        warning_messages: List[str] = []
+        ignored_names: List[str] = []
         max_size = self.provider.max_file_size_mb()
         max_duration = self.provider.max_duration_sec()
 
@@ -131,74 +147,71 @@ class Transcriber:
             for file_path in all_files:
                 validation = self.audio_validator(file_path, max_size, self.ffmpeg_available, max_duration)
 
-                if validation.warning_message:
-                    warning_messages.append(validation.warning_message)
-
-                if validation.is_valid:
-                    if validation.needs_conversion:
-                        files_needing_conversion.append(file_path)
-                    else:
-                        prepared_files.append(PreparedFile(file_path, file_path))
-                else:
+                if not validation.is_audio:
+                    ignored_names.append(file_path.name)
+                elif not validation.is_valid:
                     invalid_messages.append(f"{file_path.name}: {validation.error_message}")
+                elif validation.needs_conversion:
+                    segment_sec = self._segment_duration(validation.duration_sec, max_duration)
+                    pending.append(PendingConversion(file_path, segment_sec))
+                else:
+                    prepared_files.append(PreparedFile(file_path, (file_path,)))
                 progress.advance(task)
 
-        if warning_messages:
-            print_state("warning", "Advertencias de validación")
-            for msg in warning_messages:
-                print_bullet(msg, STYLE_WARNING)
+        if ignored_names:
+            print_state("warning", "Ignorados (no contienen audio)")
+            for name in ignored_names:
+                print_bullet(name, STYLE_WARNING)
 
         if invalid_messages:
             print_state("error", "Archivos omitidos")
             for msg in invalid_messages:
                 print_bullet(msg, STYLE_ERROR)
 
-        return prepared_files, files_needing_conversion, len(invalid_messages)
+        return prepared_files, pending, len(invalid_messages)
 
-    def _convert_files(self, files_needing_conversion: List[Path]) -> List[PreparedFile]:
-        if not files_needing_conversion:
+    @staticmethod
+    def _segment_duration(duration: Optional[float], max_duration: Optional[float]) -> Optional[float]:
+        """Duración de cada tramo si el audio supera el máximo por petición del modelo."""
+        if duration is None or max_duration is None or duration <= max_duration:
+            return None
+        return max_duration * SEGMENT_DURATION_MARGIN
+
+    def _convert_files(self, pending: List[PendingConversion], work_dir: Path) -> List[PreparedFile]:
+        if not pending:
             print_section("Fase 2 / Conversión")
             print_state("disabled", "No se requiere conversión.")
             return []
 
-        print_section(f"Fase 2 / Conversión ({len(files_needing_conversion)} archivos a {TARGET_FORMAT})")
+        print_section(f"Fase 2 / Conversión ({len(pending)} archivos a MP3 mono 16 kHz)")
 
         converted_files: List[PreparedFile] = []
         converted_count = 0
+        split_count = 0
         failed_count = 0
 
         with make_progress("Convirtiendo...") as progress:
-            task = progress.add_task("", total=len(files_needing_conversion))
+            task = progress.add_task("", total=len(pending))
             workers = min(os.cpu_count() or 4, MAX_CONVERSION_WORKERS)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = {
-                    executor.submit(self.audio_converter, path): path
-                    for path in files_needing_conversion
+                    executor.submit(
+                        self.audio_converter, item.path, work_dir / f"{index:04d}", item.segment_sec
+                    ): item
+                    for index, item in enumerate(pending)
                 }
                 for future in concurrent.futures.as_completed(futures):
-                    original = futures[future]
-                    conv_path, conv_error = future.result()
+                    original = futures[future].path
+                    parts, conv_error = future.result()
 
-                    if conv_path:
-                        converted_files.append(
-                            PreparedFile(
-                                original_path=original,
-                                transcribe_path=conv_path,
-                            )
-                        )
+                    if parts:
+                        converted_files.append(PreparedFile(original, tuple(parts)))
                         converted_count += 1
-                        try:
-                            original.unlink()
-                        except OSError as e:
-                            print_state("error", f"Error al eliminar {original.name}: {e}")
+                        split_count += len(parts) > 1
                     else:
                         converted_files.append(
-                            PreparedFile(
-                                original_path=original,
-                                transcribe_path=None,
-                                error_message=conv_error or "Error de conversión.",
-                            )
+                            PreparedFile(original, (), error_message=conv_error or "Error de conversión.")
                         )
                         failed_count += 1
 
@@ -206,6 +219,8 @@ class Transcriber:
 
         if converted_count:
             print_state("success", f"Convertidos: {converted_count} archivos")
+        if split_count:
+            print_state("info", f"Divididos en tramos por su duración: {split_count} archivos")
         if failed_count:
             print_state("error", f"Fallos: {failed_count} archivos")
 
@@ -237,14 +252,10 @@ class Transcriber:
             task = progress.add_task("", total=len(valid_files))
 
             for file in valid_files:
-                result = self.provider.transcribe(
-                    audio_path=file.transcribe_path,
-                    original_filename=file.original_path.name,
-                    prompt=prompt,
-                )
+                result = self._transcribe_parts(file, prompt)
 
                 if result.error is None:
-                    move_error = self._move_processed_audio(file.transcribe_path)
+                    move_error = self._move_processed_audio(file.original_path)
                     if move_error is None:
                         success_count += 1
                     else:
@@ -259,6 +270,28 @@ class Transcriber:
                 progress.advance(task)
 
         return success_count, error_count
+
+    def _transcribe_parts(self, file: PreparedFile, prompt: str) -> TranscriptionResult:
+        """Transcribe cada tramo en orden y devuelve un único resultado; el primer error lo aborta."""
+        total = len(file.audio_paths)
+        results: List[TranscriptionResult] = []
+        for index, audio_path in enumerate(file.audio_paths, start=1):
+            result = self.provider.transcribe(
+                audio_path=audio_path,
+                original_filename=file.original_path.name,
+                prompt=prompt,
+            )
+            if result.error is not None:
+                if total > 1:
+                    result.error = f"Tramo {index}/{total}: {result.error}"
+                return result
+            results.append(result)
+
+        merged = results[0]
+        if total > 1:
+            merged.transcription_text = "\n".join(r.transcription_text for r in results)
+            merged.transcription_time = sum(r.transcription_time for r in results)
+        return merged
 
     def _move_processed_audio(self, origin: Path) -> Optional[str]:
         try:
