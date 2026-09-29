@@ -1,3 +1,4 @@
+import re
 import textwrap
 from pathlib import Path
 
@@ -59,19 +60,8 @@ except ModuleNotFoundError:
         def advance(self, task_id: int, advance: int = 1) -> None:
             return None
 
+from fileutils import unique_path
 from models import TranscriptionResult
-
-LIGHT_TOKENS = {
-    "canvas": "#f8f8f6",
-    "text": "#121212",
-    "surface": "#ffffff",
-    "secondary": "#efeeeb",
-    "muted": "#7b7974",
-    "border": "#1f1f1e26",
-    "border_solid": "#d9d8d5",
-    "accent": "#d97757",
-    "focus": "#2977d6",
-}
 
 DARK_TOKENS = {
     "canvas": "#1f1f1e",
@@ -85,7 +75,6 @@ DARK_TOKENS = {
     "focus": "#3886e5",
 }
 
-UI_MODE = "dark"
 UI_TOKENS = DARK_TOKENS
 
 STYLE_DEFAULT = UI_TOKENS["text"]
@@ -96,14 +85,13 @@ STYLE_WARNING = "bold #c99746"
 STYLE_INFO = UI_TOKENS["focus"]
 STYLE_MUTED = UI_TOKENS["muted"]
 STYLE_DISABLED = f"dim {UI_TOKENS['muted']}"
-STYLE_BORDER = UI_TOKENS["border_solid"]
 
 STATE_LABELS = {
     "info": "INFO",
     "success": "OK",
     "warning": "AVISO",
     "error": "ERROR",
-    "empty": "VACIO",
+    "empty": "VACÍO",
     "disabled": "OFF",
     "loading": "RUN",
 }
@@ -138,20 +126,8 @@ def style_keyword(text: str) -> str:
     return style_text(text, STYLE_KEYWORD)
 
 
-def style_success(text: str) -> str:
-    return style_text(text, STYLE_SUCCESS)
-
-
 def style_error(text: str) -> str:
     return style_text(text, STYLE_ERROR)
-
-
-def style_info(text: str) -> str:
-    return style_text(text, STYLE_INFO)
-
-
-def style_warning(text: str) -> str:
-    return style_text(text, STYLE_WARNING)
 
 
 def style_muted(text: str) -> str:
@@ -203,10 +179,33 @@ def make_progress(description: str) -> Progress:
     )
 
 
+def _wrap_paragraphs(text: str, width: int = 80) -> str:
+    # textwrap.fill sobre todo el texto fundiría los saltos de línea del modelo en un solo párrafo.
+    return "\n".join(textwrap.fill(line, width=width) for line in text.splitlines())
+
+
+_ERROR_REPORT = re.compile(r"^ERROR DE (CONVERSI[OÓ]N|TRANSCRIPCI[OÓ]N):", re.MULTILINE)
+
+
+def _is_error_report(path: Path) -> bool:
+    try:
+        return bool(_ERROR_REPORT.search(path.read_text(encoding="utf-8")))
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _output_path(msg_dir: Path, file_name: str) -> Path:
+    """Reemplaza el informe de error de un intento previo, pero nunca una transcripción existente."""
+    path = msg_dir / f"{Path(file_name).name}.txt"
+    if path.exists() and not _is_error_report(path):
+        return unique_path(path)
+    return path
+
+
 def write_transcription_file(result: TranscriptionResult, output_dir: Path) -> None:
     msg_dir = output_dir / "msg"
     msg_dir.mkdir(parents=True, exist_ok=True)
-    output_file = msg_dir / f"{Path(result.file_name).name}.txt"
+    output_file = _output_path(msg_dir, result.file_name)
 
     try:
         with open(output_file, "w", encoding="utf-8") as f:
@@ -218,15 +217,15 @@ def write_transcription_file(result: TranscriptionResult, output_dir: Path) -> N
                 f.write(f"ADVERTENCIA: {result.postprocess_warning}\n")
 
             if result.conversion_error:
-                f.write(f"ERROR DE CONVERSION: {result.conversion_error}\n\n")
+                f.write(f"ERROR DE CONVERSIÓN: {result.conversion_error}\n\n")
             elif result.error:
-                f.write(f"ERROR DE TRANSCRIPCION: {result.error}\n\n")
+                f.write(f"ERROR DE TRANSCRIPCIÓN: {result.error}\n\n")
             else:
-                f.write("\nTRANSCRIPCION:\n")
+                f.write("\nTRANSCRIPCIÓN:\n")
                 f.write("-" * 85 + "\n")
-                f.write(textwrap.fill(result.transcription_text, width=80) + "\n")
+                f.write(_wrap_paragraphs(result.transcription_text) + "\n")
                 f.write("-" * 85 + "\n")
             f.write("\n\n")
-        print_state("success", f"Transcripcion guardada: {output_file}")
+        print_state("success", f"Resultado guardado: {output_file}")
     except Exception as e:
         print_state("error", f"Error al escribir en {output_file}: {e}")

@@ -9,8 +9,10 @@ from config import (
     MIN_AUDIO_DURATION_SEC,
     FFMPEG_TIMEOUT_SEC,
     TARGET_FORMAT,
+    TEMP_SUFFIX,
     AUDIO_EXTENSIONS,
 )
+from fileutils import unique_path
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ def validate_audio(
     audio_path: Path,
     max_size_mb: float,
     ffmpeg_available: bool,
+    max_duration_sec: Optional[float] = None,
     duration_fn: Callable[[Path], Optional[float]] = get_duration,
 ) -> AudioValidation:
     needs_conversion = audio_path.suffix.lower() != TARGET_FORMAT
@@ -83,6 +86,14 @@ def validate_audio(
                 error_message=f"Audio demasiado corto ({duration:.2f}s < {MIN_AUDIO_DURATION_SEC}s)",
                 needs_conversion=needs_conversion,
             )
+        if duration is not None and max_duration_sec is not None and duration > max_duration_sec:
+            return AudioValidation(
+                is_valid=False,
+                error_message=(
+                    f"Audio demasiado largo ({duration / 60:.1f} min > {max_duration_sec / 60:.0f} min)"
+                ),
+                needs_conversion=needs_conversion,
+            )
 
     return AudioValidation(
         is_valid=True,
@@ -94,10 +105,11 @@ def validate_audio(
 
 def convert_audio(input_path: Path) -> Tuple[Optional[Path], Optional[str]]:
     final_output = _converted_output_path(input_path)
-    temp_output = input_path.parent / f"{final_output.stem}_temp{TARGET_FORMAT}"
+    temp_output = final_output.with_name(final_output.name + TEMP_SUFFIX)
 
     command = [
         "ffmpeg", "-y", "-i", str(input_path), "-vn",
+        "-f", TARGET_FORMAT.lstrip("."),
         "-c:a", "libmp3lame", "-b:a", "128k",
         str(temp_output), "-hide_banner", "-loglevel", "error",
     ]
@@ -132,24 +144,19 @@ def convert_audio(input_path: Path) -> Tuple[Optional[Path], Optional[str]]:
         return None, f"Error inesperado: {e}"
 
 
+def cleanup_temp_files(directory: Path) -> None:
+    """Elimina los archivos parciales que dejó una conversión interrumpida."""
+    for path in directory.glob(f"*{TARGET_FORMAT}{TEMP_SUFFIX}"):
+        _cleanup(path)
+
+
 def _cleanup(path: Path) -> None:
     try:
-        if path.exists():
-            path.unlink()
+        path.unlink(missing_ok=True)
     except OSError:
         pass
 
 
 def _converted_output_path(input_path: Path) -> Path:
     source_suffix = input_path.suffix.lower().lstrip(".") or "audio"
-    base_name = f"{input_path.stem}.{source_suffix}{TARGET_FORMAT}"
-    candidate = input_path.with_name(base_name)
-    counter = 1
-
-    while candidate.exists():
-        candidate = input_path.with_name(
-            f"{input_path.stem}.{source_suffix}.{counter}{TARGET_FORMAT}"
-        )
-        counter += 1
-
-    return candidate
+    return unique_path(input_path.with_name(f"{input_path.stem}.{source_suffix}{TARGET_FORMAT}"))
