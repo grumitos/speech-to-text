@@ -12,7 +12,7 @@ import httpx
 from google import genai
 from google.genai import errors, types
 
-from config import (
+from speech_to_text.config import (
     AVAILABLE_GEMINI_MODELS,
     DEFAULT_GEMINI_MODEL,
     GEMINI_FILES_API_LIMIT_MB,
@@ -23,7 +23,7 @@ from config import (
     RETRY_BASE_DELAY,
     RETRYABLE_STATUS_CODES,
 )
-from providers import TRANSCRIPTION_PROMPT, GeminiProvider, get_provider
+from speech_to_text.providers import TRANSCRIPTION_PROMPT, GeminiProvider, get_provider
 
 DEDICATED_MODEL = "gemini-3.5-transcribe"
 PROMPT_MODEL = "gemini-3.8-flash"
@@ -84,7 +84,7 @@ class InitializeTests(unittest.TestCase):
 
     def test_example_placeholder_is_not_a_valid_api_key(self) -> None:
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "tu_clave_aqui"}), \
-                patch("providers.genai.Client") as client_cls, \
+                patch("speech_to_text.providers.genai.Client") as client_cls, \
                 self.assertRaisesRegex(ValueError, "GOOGLE_API_KEY no configurada"):
             GeminiProvider().initialize()
 
@@ -92,7 +92,7 @@ class InitializeTests(unittest.TestCase):
 
     def test_client_retries_transient_errors_has_a_timeout_and_checks_the_model(self) -> None:
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), \
-                patch("providers.genai.Client") as client_cls:
+                patch("speech_to_text.providers.genai.Client") as client_cls:
             provider = GeminiProvider(PROMPT_MODEL)
             provider.initialize()
 
@@ -106,7 +106,7 @@ class InitializeTests(unittest.TestCase):
 
     def test_wraps_model_lookup_failures(self) -> None:
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), \
-                patch("providers.genai.Client") as client_cls:
+                patch("speech_to_text.providers.genai.Client") as client_cls:
             client_cls.return_value.models.get.side_effect = RuntimeError("404 NOT_FOUND")
 
             with self.assertRaisesRegex(ValueError, "404 NOT_FOUND"):
@@ -240,7 +240,7 @@ class TranscribeTests(unittest.TestCase):
         self.uploaded = processing
         provider.client.files.get.side_effect = [processing, active]
 
-        with patch("providers.time.sleep") as sleep:
+        with patch("speech_to_text.providers.time.sleep") as sleep:
             result = provider.transcribe(self.audio_path, "voice.mp3")
 
         self.assertIsNone(result.error)
@@ -260,7 +260,7 @@ class TranscribeTests(unittest.TestCase):
 
         stuck = SimpleNamespace(name="files/abc123", state=types.FileState.PROCESSING)
         self.uploaded = stuck
-        with patch("providers.FILE_PROCESSING_TIMEOUT_SEC", -1):
+        with patch("speech_to_text.providers.FILE_PROCESSING_TIMEOUT_SEC", -1):
             result = provider.transcribe(self.audio_path, "voice.mp3")
 
         self.assertIn("no terminó de procesarse", result.error or "")
@@ -335,7 +335,7 @@ class RateLimitRetryTests(unittest.TestCase):
         provider.client = MagicMock()
         provider.client.files.upload.return_value = SimpleNamespace(name="files/abc", state=None)
         provider.client.models.generate_content.side_effect = side_effect
-        with patch("providers.time.sleep") as sleep:
+        with patch("speech_to_text.providers.time.sleep") as sleep:
             result = provider.transcribe(self.audio_path, "voice.mp3")
         return result, provider.client.models.generate_content.call_count, sleep
 

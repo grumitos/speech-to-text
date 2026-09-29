@@ -8,7 +8,7 @@ from typing import List, Optional
 from google import genai
 from google.genai import errors, types
 
-from config import (
+from .config import (
     AVAILABLE_GEMINI_MODELS,
     DEFAULT_GEMINI_MODEL,
     FILE_POLL_INTERVAL_SEC,
@@ -22,7 +22,7 @@ from config import (
     RETRY_BASE_DELAY,
     RETRYABLE_STATUS_CODES,
 )
-from models import TranscriptionResult
+from .models import TranscriptionResult
 
 PLACEHOLDER_API_KEY = "tu_clave_aqui"  # valor de .env.example
 

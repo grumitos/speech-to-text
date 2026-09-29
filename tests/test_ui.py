@@ -4,8 +4,8 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from models import TranscriptionResult
-from ui import write_transcription_file
+from speech_to_text.models import TranscriptionResult
+from speech_to_text.ui import write_transcription_file
 
 
 class UiTests(unittest.TestCase):

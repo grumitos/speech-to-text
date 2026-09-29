@@ -3,7 +3,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from main import build_parser, make_output_safe
+from speech_to_text.__main__ import build_parser, make_output_safe
 
 
 class OutputSafetyTests(unittest.TestCase):

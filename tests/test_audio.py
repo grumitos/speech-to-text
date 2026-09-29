@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from audio import (
+from speech_to_text.audio import (
     AudioInfo,
     _detect_silences,
     check_ffmpeg,
@@ -146,7 +146,7 @@ class ValidateWithFfmpegTests(unittest.TestCase):
 class ProbeAudioTests(unittest.TestCase):
     def _probe(self, stdout: str = "", returncode: int = 0, error: Exception | None = None):
         completed = SimpleNamespace(stdout=stdout, returncode=returncode)
-        with patch("audio.subprocess.run", side_effect=error, return_value=completed):
+        with patch("speech_to_text.audio.subprocess.run", side_effect=error, return_value=completed):
             return probe_audio(Path("x.mp3"))
 
     def test_reads_codec_and_duration_of_the_first_audio_stream(self) -> None:
@@ -205,11 +205,11 @@ class CutPointTests(unittest.TestCase):
             "[silencedetect @ 0x1] silence_end: 2.25 | silence_duration: 0.75\n"
             "[silencedetect @ 0x1] silence_start: 9\n"
         )
-        with patch("audio.subprocess.run", return_value=SimpleNamespace(stderr=stderr)):
+        with patch("speech_to_text.audio.subprocess.run", return_value=SimpleNamespace(stderr=stderr)):
             self.assertEqual(_detect_silences(Path("x.mp3")), [(1.5, 2.25)])  # el último no termina
 
     def test_detecting_silences_never_raises(self) -> None:
-        with patch("audio.subprocess.run", side_effect=subprocess.TimeoutExpired("ffmpeg", 1)):
+        with patch("speech_to_text.audio.subprocess.run", side_effect=subprocess.TimeoutExpired("ffmpeg", 1)):
             self.assertEqual(_detect_silences(Path("x.mp3")), [])
 
 
@@ -226,9 +226,9 @@ class ConvertAudioTests(unittest.TestCase):
                     (out_dir / name).write_bytes(b"mp3")
                 return SimpleNamespace()
 
-            with patch("audio.subprocess.run", side_effect=fake_run), \
-                    patch("audio.probe_audio", return_value=probe), \
-                    patch("audio._detect_silences", return_value=list(silences)):
+            with patch("speech_to_text.audio.subprocess.run", side_effect=fake_run), \
+                    patch("speech_to_text.audio.probe_audio", return_value=probe), \
+                    patch("speech_to_text.audio._detect_silences", return_value=list(silences)):
                 result = convert_audio(Path(tmp) / "in.wav", out_dir, segment_sec)
             return result, seen["command"], out_dir
 
@@ -268,7 +268,7 @@ class ConvertAudioTests(unittest.TestCase):
     def _failing(self, error: Exception):
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "out"
-            with patch("audio.subprocess.run", side_effect=error):
+            with patch("speech_to_text.audio.subprocess.run", side_effect=error):
                 result = convert_audio(Path(tmp) / "in.wav", out_dir)
             return result, out_dir.exists()
 

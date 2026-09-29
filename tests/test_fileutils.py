@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fileutils import unique_path
+from speech_to_text.fileutils import unique_path
 
 
 class UniquePathTests(unittest.TestCase):

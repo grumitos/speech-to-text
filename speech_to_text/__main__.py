@@ -1,3 +1,9 @@
+"""Transcribe los audios de entrada/ y guarda cada transcripción en salida/.
+
+    python -m speech_to_text                              modelo por defecto
+    python -m speech_to_text --model gemini-3.8-flash --prompt "..."
+"""
+
 import argparse
 import os
 import sys
@@ -6,16 +12,16 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from config import (
+from .config import (
     AVAILABLE_GEMINI_MODELS,
     DEFAULT_GEMINI_MODEL,
     DEFAULT_INPUT_DIR,
     DEFAULT_OUTPUT_DIR,
     GEMINI_MODELS,
 )
-from providers import get_provider
-from transcriber import Transcriber
-from ui import console, style_error, style_keyword, STYLE_INFO, STYLE_ERROR, STYLE_DEFAULT, STYLE_SUCCESS
+from .providers import get_provider
+from .transcriber import Transcriber
+from .ui import console, style_error, style_keyword, STYLE_INFO, STYLE_ERROR, STYLE_DEFAULT, STYLE_SUCCESS
 
 
 def make_output_safe() -> None:
@@ -30,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     prompt_models = ", ".join(m.id for m in GEMINI_MODELS.values() if m.accepts_prompt)
 
     parser = argparse.ArgumentParser(
+        prog="python -m speech_to_text",
         description="Transcribe archivos de audio usando Google Gemini"
     )
     parser.add_argument(

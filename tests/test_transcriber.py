@@ -6,10 +6,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from audio import AudioValidation
-from models import TranscriptionResult
-from providers import TranscriptionProvider
-from transcriber import Transcriber
+from speech_to_text.audio import AudioValidation
+from speech_to_text.models import TranscriptionResult
+from speech_to_text.providers import TranscriptionProvider
+from speech_to_text.transcriber import Transcriber
 
 PASS_THROUGH = AudioValidation(is_valid=True, error_message=None, needs_conversion=False)
 

@@ -60,8 +60,8 @@ except ModuleNotFoundError:
         def advance(self, task_id: int, advance: int = 1) -> None:
             return None
 
-from fileutils import unique_path
-from models import TranscriptionResult
+from .fileutils import unique_path
+from .models import TranscriptionResult
 
 DARK_TOKENS = {
     "canvas": "#1f1f1e",

@@ -7,18 +7,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from audio import (
+from .audio import (
     AudioValidation,
     check_ffmpeg,
     convert_audio,
     is_candidate_file,
     validate_audio,
 )
-from config import MAX_CONVERSION_WORKERS, SEGMENT_DURATION_MARGIN
-from fileutils import unique_path
-from models import TranscriptionResult
-from providers import TranscriptionProvider
-from ui import (
+from .config import MAX_CONVERSION_WORKERS, SEGMENT_DURATION_MARGIN
+from .fileutils import unique_path
+from .models import TranscriptionResult
+from .providers import TranscriptionProvider
+from .ui import (
     make_progress,
     print_bullet,
     print_kv,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from config import (
+from .config import (
     AUDIO_EXTENSIONS,
     FFMPEG_TIMEOUT_SEC,
     FFPROBE_TIMEOUT_SEC,
