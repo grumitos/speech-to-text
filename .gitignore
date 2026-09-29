@@ -1,33 +1,25 @@
-# Secrets
+# Secretos
 .env
 .env.*
 !.env.example
 
-# Python cache/build
+# Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-*.so
+venv/
+.venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
-.tox/
 
-# Virtual environments
-venv/
-.venv/
-
-# Local runtime/generated folders
+# Datos locales y salidas generadas
 entrada/
 salida/
 
-# IDE/editor
-.vscode/
-.idea/
-
-# OS junk
+# Sistema y editores
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/
