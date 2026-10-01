@@ -72,7 +72,6 @@ DARK_TOKENS = {
     "border": "#e2e1da26",
     "border_solid": "#333331",
     "accent": "#d97757",
-    "focus": "#3886e5",
 }
 
 UI_TOKENS = DARK_TOKENS
@@ -82,7 +81,7 @@ STYLE_KEYWORD = f"bold {UI_TOKENS['accent']}"
 STYLE_SUCCESS = "bold #74a47f"
 STYLE_ERROR = "bold #d76b63"
 STYLE_WARNING = "bold #c99746"
-STYLE_INFO = UI_TOKENS["focus"]
+STYLE_INFO = f"bold {UI_TOKENS['text']}"
 STYLE_MUTED = UI_TOKENS["muted"]
 STYLE_DISABLED = f"dim {UI_TOKENS['muted']}"
 

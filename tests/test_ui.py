@@ -5,6 +5,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from speech_to_text.models import TranscriptionResult
+from speech_to_text import ui
 from speech_to_text.ui import STYLE_KEYWORD, style_provider, write_transcription_file
 
 
@@ -112,6 +113,13 @@ class ProviderStyleTests(unittest.TestCase):
     def test_gemini_and_its_models_use_the_gemini_blue(self) -> None:
         self.assertEqual(style_provider("gemini"), "[bold #4796e3]gemini[/]")
         self.assertEqual(style_provider("gemini-3.8-flash", "gemini"), "[bold #4796e3]gemini-3.8-flash[/]")
+
+    def test_no_other_style_uses_a_provider_color(self) -> None:
+        provider_colors = {color.split()[-1] for color in ui.PROVIDER_STYLES.values()}
+        other_styles = [value for name, value in vars(ui).items() if name.startswith("STYLE_")]
+        other_styles += list(ui.STATE_STYLES.values()) + list(ui.UI_TOKENS.values())
+        for style in other_styles:
+            self.assertFalse(provider_colors & set(str(style).split()), style)
 
     def test_an_unknown_provider_falls_back_to_the_keyword_style(self) -> None:
         self.assertEqual(style_provider("otro"), f"[{STYLE_KEYWORD}]otro[/]")
