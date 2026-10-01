@@ -6,6 +6,8 @@ Lee los archivos de un directorio de entrada (cualquier archivo con una pista de
 los vídeos), los convierte a un formato estándar cuando hace falta, los envía a Gemini y guarda
 cada transcripción como un archivo `.txt` en el directorio de salida.
 
+![Ejecución de la CLI con tres audios de ejemplo](docs/screenshots/cli.png)
+
 ## Requisitos
 
 - Windows con Python 3.10 o superior en el `PATH` (el código no depende del sistema operativo,
@@ -111,10 +113,11 @@ informe de error de un intento anterior, que un reintento sí reemplaza.
 
 ## Privacidad
 
-Los audios (`entrada/`), las transcripciones (`salida/`) y `.env` permanecen en local y están
-fuera de Git. El audio se envía a Google Gemini únicamente para ejecutar la transcripción
-solicitada: se sube a la Files API de Google y se borra en cuanto termina (si el borrado fallara,
-Google lo elimina por su cuenta a las 48 horas). El nombre del archivo no se envía.
+Los audios (`entrada/`), las transcripciones (`salida/`) y `.env` permanecen en local y están fuera
+de Git. El audio se envía a Google Gemini únicamente para ejecutar la transcripción solicitada: se
+sube a la Files API de Google y se borra en cuanto termina (si el borrado fallara, Google lo elimina
+por su cuenta a las 48 horas). El nombre del archivo no se envía. La captura de `docs/screenshots/`
+se generó con audios y respuestas de ejemplo.
 
 ## Pruebas
 
@@ -139,6 +142,7 @@ speech_to_text/     paquete de la aplicación
   fileutils.py      nombres de archivo únicos para no sobrescribir salidas
   models.py         resultado de una transcripción
 tests/              pruebas: python -m unittest
+docs/               captura de la CLI
 .env.example        plantilla de .env
 requirements.txt    dependencias
 run.bat             lanzador para Windows: prepara el entorno la primera vez
